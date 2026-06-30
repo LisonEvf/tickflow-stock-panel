@@ -1,0 +1,6 @@
+[submodule "backend/opentdx"]
+	path = backend/opentdx
+	url = https://github.com/qunyou-agent/opentdx.git
+[submodule "backend/openkph"]
+	path = backend/openkph
+	url = https://github.com/qunyou-agent/openkph.git
