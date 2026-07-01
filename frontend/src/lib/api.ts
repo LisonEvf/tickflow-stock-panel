@@ -529,6 +529,80 @@ export interface BacktestResult {
   per_symbol_stats: { symbol: string; total_return: number }[]
 }
 
+// ===== Trading Journal =====
+export interface TradingFeeSettings {
+  commission_rate: number
+  min_commission: number
+  stamp_tax_rate: number
+  transfer_fee_rate: number
+}
+
+export interface TradingAccount {
+  principal: number
+  cash_adjustment: number
+  fee_settings: TradingFeeSettings
+  updated_at?: string
+}
+
+export interface TradingTrade {
+  id: string
+  symbol: string
+  name?: string
+  side: 'buy' | 'sell'
+  trade_time: string
+  price: number
+  quantity: number
+  fee: number
+  note?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface TradingTradePayload {
+  symbol: string
+  name?: string
+  side: 'buy' | 'sell'
+  trade_time: string
+  price: number
+  quantity: number
+  fee?: number | null
+  note?: string
+}
+
+export interface TradingPosition {
+  symbol: string
+  name?: string
+  quantity: number
+  avg_cost: number
+  cost_basis: number
+  latest_price?: number | null
+  market_value: number
+  unrealized_pnl: number
+  unrealized_pnl_pct?: number | null
+  realized_pnl: number
+  weight: number
+}
+
+export interface TradingSummary {
+  principal: number
+  cash_adjustment: number
+  cash: number
+  market_value: number
+  total_assets: number
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  position_ratio: number
+}
+
+export interface TradingPortfolio {
+  account: TradingAccount
+  summary: TradingSummary
+  positions: TradingPosition[]
+  trades: TradingTrade[]
+  warnings: string[]
+}
+
 // ===== Factor Backtest =====
 export interface FactorColumn {
   id: string
@@ -1006,6 +1080,36 @@ export const api = {
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
+
+  // ===== Trading Journal =====
+  tradingPortfolio: () =>
+    request<TradingPortfolio>('/api/trading/portfolio'),
+
+  tradingUpdateAccount: (body: Partial<Pick<TradingAccount, 'principal' | 'cash_adjustment'>> & {
+    fee_settings?: Partial<TradingFeeSettings>
+  }) =>
+    request<{ account: TradingAccount }>('/api/trading/account', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  tradingAddTrade: (body: TradingTradePayload) =>
+    request<{ trade: TradingTrade; portfolio: TradingPortfolio }>('/api/trading/trades', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  tradingUpdateTrade: (id: string, body: TradingTradePayload) =>
+    request<{ trade: TradingTrade; portfolio: TradingPortfolio }>(`/api/trading/trades/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  tradingDeleteTrade: (id: string) =>
+    request<{ ok: boolean; portfolio: TradingPortfolio }>(`/api/trading/trades/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   indexList: () => request<{ results: IndexInstrument[]; count: number }>('/api/index/list'),
   indexSearch: (q: string, limit = 20) =>
     request<{ results: IndexInstrument[] }>(

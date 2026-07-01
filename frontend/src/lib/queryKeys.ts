@@ -39,6 +39,9 @@ export const QK = {
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
 
+  // Trading journal
+  tradingPortfolio:     ['trading-portfolio'] as const,
+
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
