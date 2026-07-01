@@ -85,5 +85,5 @@ export const SSE_INVALIDATE_PREFIXES = [
   'index-quotes',
   'overview-market',
   'limit-ladder',
-  'screener-cached',
+  'screener',
 ] as const

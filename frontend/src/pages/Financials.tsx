@@ -71,6 +71,11 @@ export function Financials() {
             toast(r.synced.reason, 'error')
           } else {
             toast('财务同步未启动', 'error')
+          } else if (r.synced?.reason === 'no FINANCIAL capability') {
+            // 能力未就绪:通常发生在升级/刷新 Key 后调度器状态未同步 —— 提示用户检查 Key
+            toast('财务数据能力未就绪,请检查 API Key 或刷新页面后重试', 'error')
+          } else {
+            toast(`同步未能开始${r.synced?.reason ? `:${r.synced.reason}` : ''}`, 'error')
           }
           setSyncStartedAt(null)
           setSyncSingleTable(null)

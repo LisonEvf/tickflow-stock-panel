@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-__version__ = "0.1.66"
+__version__ = "0.1.68"
 
 _LOCAL_OPENTDX = Path(__file__).resolve().parents[1] / "opentdx"
 if _LOCAL_OPENTDX.exists():

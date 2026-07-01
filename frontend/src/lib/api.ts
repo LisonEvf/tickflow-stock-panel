@@ -709,6 +709,7 @@ export interface Preferences {
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
   review_schedule: { enabled: boolean; hour: number; minute: number }
+  review_push_channels: string[]
   sse_refresh_pages: Record<string, boolean>
   strategy_monitor_enabled: boolean
   strategy_monitor_ids: string[]
@@ -891,6 +892,11 @@ export const api = {
     request<{ enabled: boolean; hour: number; minute: number }>('/api/settings/preferences/review-schedule', {
       method: 'PUT',
       body: JSON.stringify({ enabled, hour, minute }),
+    }),
+  updateReviewPush: (channels: string[]) =>
+    request<{ review_push_channels: string[] }>('/api/settings/preferences/review-push', {
+      method: 'PUT',
+      body: JSON.stringify({ channels }),
     }),
   updateDepthPollingInterval: (interval: number) =>
     request<{ depth_polling_interval: number }>('/api/settings/preferences/depth-polling-interval', {
