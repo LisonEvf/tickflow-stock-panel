@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { AnimatePresence } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
   Crown,
@@ -8,25 +7,20 @@ import {
   RefreshCw,
   Repeat,
   Search,
-  Settings2,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { AnalysisConfigDialog, PresetFetchState, type AnalysisFieldConfig } from '@/components/analysis-shared'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { api, type MarketSnapshotRow } from '@/lib/api'
+import { api, type ExtDataConfig, type MarketSnapshotRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { toast } from '@/components/Toast'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 
-const KEYWORDS = ['concept', '概念', 'theme', '题材', '板块']
 const CANDIDATE_FIELDS = ['concept', '概念', 'theme', '题材', '板块', 'concept_name', '概念名称']
-const PAGE_LIMIT = 12000
 const MAX_RENDERED_CONCEPTS = 120
 const MAX_RENDERED_STOCKS = 160
 
@@ -62,30 +56,6 @@ interface ConceptStat {
   leader: EnrichedStock | null
   heatScore: number
   riskScore: number
-}
-
-function loadConfig(): AnalysisFieldConfig {
-  return storage.conceptAnalysisConfig.get({}) as AnalysisFieldConfig
-}
-
-function saveConfig(c: AnalysisFieldConfig) {
-  storage.conceptAnalysisConfig.set(c)
-}
-
-function pickBestConfig(
-  configs: { id: string; label: string; description?: string; fields: { name: string; label: string }[] }[],
-): string {
-  let best = ''
-  let bestScore = 0
-  for (const c of configs) {
-    const haystack = [c.id, c.label, c.description ?? '', ...c.fields.flatMap(f => [f.name, f.label])].join(' ').toLowerCase()
-    const score = KEYWORDS.reduce((n, k) => n + (haystack.includes(k) ? 1 : 0), 0)
-    if (score > bestScore) {
-      bestScore = score
-      best = c.id
-    }
-  }
-  return best
 }
 
 function symbolKeys(symbol: unknown): string[] {
@@ -234,54 +204,38 @@ function statSort(mode: SortMode) {
 }
 
 export function ConceptAnalysis() {
-  const [fieldConfig, setFieldConfig] = useState<AnalysisFieldConfig>(loadConfig)
-  const [showConfig, setShowConfig] = useState(false)
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<SortMode>('heat')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
 
-  const configsQuery = useQuery({ queryKey: QK.extData, queryFn: api.extDataList })
-  const availableConfigs = configsQuery.data?.items ?? []
-  // 用户配置的 configId 可能已失效 (扩展数据被删除), 此时回退到自动选择,
-  // 避免用失效 ID 请求接口报错; 用户仍可点配置按钮重新选择。
-  const preferredConfigId = fieldConfig.configId || pickBestConfig(availableConfigs)
-  const preferredConfig = availableConfigs.find(c => c.id === preferredConfigId)
-  const activeConfigId = preferredConfig ? preferredConfigId : pickBestConfig(availableConfigs)
-  const activeConfig = availableConfigs.find(c => c.id === activeConfigId)
-
-  const rowsQuery = useQuery({
-    queryKey: QK.extDataRows(activeConfigId, undefined, PAGE_LIMIT),
-    queryFn: () => api.extDataRows(activeConfigId, { limit: PAGE_LIMIT }),
-    enabled: !!activeConfigId,
+  const openkplQuery = useQuery({
+    queryKey: QK.openkplPlateAnalysis('concept'),
+    queryFn: () => api.openkplPlateAnalysis('concept'),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   })
 
-  // 内置概念预设 (ext_gn_ths) 手动获取数据
-  const PRESET_CONCEPT_ID = 'ext_gn_ths'
-  const queryClient = useQueryClient()
-  const fetchMutation = useMutation({
-    mutationFn: () => api.extDataPresetFetch(PRESET_CONCEPT_ID),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.extData })
-      queryClient.invalidateQueries({ queryKey: QK.extDataRows(PRESET_CONCEPT_ID, undefined, PAGE_LIMIT) })
-    },
-  })
-  // 是否处于「内置概念预设存在但无数据」状态 → 显示获取按钮
-  const needsConceptFetch =
-    !!activeConfig && activeConfig.id === PRESET_CONCEPT_ID &&
-    !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
+  const activeConfig = useMemo<ExtDataConfig | null>(() => {
+    const data = openkplQuery.data
+    if (!data) return null
+    return {
+      id: data.id,
+      label: data.label,
+      mode: data.mode,
+      fields: data.fields,
+      description: 'openkpl',
+      created_at: '',
+      updated_at: '',
+      latest_sync_date: data.as_of,
+    }
+  }, [openkplQuery.data])
 
-  const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
-    staleTime: 60_000,
-  })
-
-  const marketMap = useMemo(() => buildMarketMap(marketQuery.data?.rows ?? []), [marketQuery.data?.rows])
+  const marketMap = useMemo(() => buildMarketMap((openkplQuery.data?.rows ?? []) as MarketSnapshotRow[]), [openkplQuery.data?.rows])
   const resolved = useMemo(
-    () => resolveDimension(rowsQuery.data, activeConfig, fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
-    [rowsQuery.data, activeConfig, fieldConfig.dimensionField],
+    () => resolveDimension(openkplQuery.data, activeConfig, CANDIDATE_FIELDS),
+    [openkplQuery.data, activeConfig],
   )
 
   const stats = useMemo(() => {
@@ -315,49 +269,15 @@ export function ConceptAnalysis() {
     return set.size
   }, [stats])
 
-  const handleSaveConfig = (c: AnalysisFieldConfig) => {
-    setFieldConfig(c)
-    saveConfig(c)
-    setSelectedKey(null)
-  }
-
-  if (configsQuery.isLoading) {
+  if (openkplQuery.isLoading) {
     return <div className="flex h-full items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted" /></div>
-  }
-
-  if (!activeConfig) {
-    // 极端情况: 无任何概念配置。仍提供一键获取内置概念数据入口
-    return (
-      <>
-        <div className="flex h-full flex-col">
-          <PageHeader
-            title="概念分析"
-            right={
-              <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
-                <Settings2 className="h-4 w-4" />
-              </button>
-            }
-          />
-          <PresetFetchState
-            title="暂无概念数据"
-            hint="从同花顺获取概念分类数据后即可使用概念分析"
-            isLoading={fetchMutation.isPending}
-            error={fetchMutation.error}
-            onFetch={() => fetchMutation.mutate()}
-          />
-        </div>
-        <AnimatePresence>
-          {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
-        </AnimatePresence>
-      </>
-    )
   }
 
   return (
     <>
       <PageHeader
         title="概念分析"
-        subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
+        subtitle={`${openkplQuery.data?.as_of ?? openkplQuery.data?.date ?? '最新'} · openkpl · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">
             {/* RPS 轮动计算(占位, 功能开发中) */}
@@ -369,15 +289,12 @@ export function ConceptAnalysis() {
               <Repeat className="h-3.5 w-3.5" />涨幅RPS轮动
             </button>
             <button
-              onClick={() => { rowsQuery.refetch(); marketQuery.refetch() }}
-              disabled={rowsQuery.isFetching || marketQuery.isFetching}
+              onClick={() => { openkplQuery.refetch() }}
+              disabled={openkplQuery.isFetching}
               className="p-1.5 text-muted hover:bg-surface disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={cn('h-4 w-4', (rowsQuery.isFetching || marketQuery.isFetching) && 'animate-spin')} />
-            </button>
-            <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
-              <Settings2 className="h-4 w-4" />
+              <RefreshCw className={cn('h-4 w-4', openkplQuery.isFetching && 'animate-spin')} />
             </button>
           </div>
         }
@@ -408,25 +325,13 @@ export function ConceptAnalysis() {
               />
               <ConceptFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
-          ) : rowsQuery.isLoading ? (
+          ) : openkplQuery.isLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算概念强度...</div>
-          ) : needsConceptFetch ? (
-            <PresetFetchState
-              title="未获取概念数据"
-              hint="内置概念数据源已就绪,点击下方按钮从同花顺获取概念分类数据"
-              isLoading={fetchMutation.isPending}
-              error={fetchMutation.error}
-              onFetch={() => fetchMutation.mutate()}
-            />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到概念数据" hint={resolved.hint || '请检查扩展数据是否包含概念/题材相关字段'} />
+            <EmptyState icon={Layers3} title="openkpl 暂无概念数据" hint={resolved.hint || 'openkpl 暂未返回可展示的概念成分股'} />
           )}
         </div>
       </div>
-
-      <AnimatePresence>
-        {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
-      </AnimatePresence>
 
       {previewSymbol && (
         <StockPreviewDialog

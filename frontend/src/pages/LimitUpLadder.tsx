@@ -63,17 +63,21 @@ const DEFAULT_BF: BrokenFailedConfig = {
   failedShow: true,
 }
 
+const ENABLE_LADDER_CONFIG = false
+const SHOW_DEPTH_BADGE = false
+
+const FIXED_OPENKPL_FIELDS: ExtFieldConfig = {
+  concept: { field: 'openkpl.concept', display: { displayMode: 'tag' } },
+  industry: { field: 'openkpl.industry', display: { displayMode: 'tag' } },
+  bf: DEFAULT_BF,
+  showConceptStats: true,
+  showIndustryStats: false,
+  showConceptGroupStats: false,
+  showIndustryGroupStats: false,
+}
+
 function loadExtFields(): ExtFieldConfig {
-  const raw = storage.limitLadderExtFields.get({}) as any
-  if (!raw) return {}
-  // 兼容旧格式 { concept: "id.field", conceptSep: "x" }
-  if (typeof raw.concept === 'string') {
-    return {
-      concept: raw.concept ? { field: raw.concept, display: { displayMode: 'tag', separator: raw.conceptSep } } : undefined,
-      industry: raw.industry ? { field: raw.industry, display: { displayMode: 'tag', separator: raw.industrySep } } : undefined,
-    }
-  }
-  return raw
+  return FIXED_OPENKPL_FIELDS
 }
 
 /** 根据显示开关过滤 extFields */
@@ -1153,9 +1157,10 @@ export function LimitUpLadder() {
   const extColumnsParam = useMemo(() => buildExtColumnsParam(extFields), [extFields])
 
   const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: [QK.limitLadder(asOf || undefined), extColumnsParam, direction],
-    queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
-    staleTime: 5 * 60_000,
+    queryKey: [QK.limitLadder(asOf || undefined), extColumnsParam, direction, 'openkpl'],
+    queryFn: () => api.openkplLimitLadder(asOf || undefined, direction),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   })
 
   const rawTiers = data?.tiers ?? []
@@ -1179,7 +1184,7 @@ export function LimitUpLadder() {
     return (
       <div className="flex flex-col h-full">
         <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
-        <EmptyState icon={Flame} title={direction === 'down' ? '暂无连跌数据' : '暂无连板数据'} hint={direction === 'down' ? '该日期无跌停股或 enriched 数据未就绪' : '该日期无涨停股或 enriched 数据未就绪'} />
+        <EmptyState icon={Flame} title={direction === 'down' ? 'openkpl 暂无连跌数据' : 'openkpl 暂无连板数据'} hint={direction === 'down' ? 'openkpl 当前未返回跌停梯队' : 'openkpl 当前未返回涨停梯队'} />
       </div>
     )
   }
@@ -1190,16 +1195,18 @@ export function LimitUpLadder() {
         title={direction === 'down' ? '连跌梯队' : '连板梯队'}
         titleExtra={
           <div className="flex items-center gap-2">
-            <SealedBadge
-              degraded={sealedDegrade.degraded}
-              hasDepth={sealedDegrade.hasDepth}
-              isHistorical={sealedDegrade.isHistorical}
-              sealedReady={sealedDegrade.sealedReady}
-              sealedCountsUp={data?.sealed_counts_up}
-              sealedCountsDown={data?.sealed_counts_down}
-              rawUp={data?.counts_raw?.up}
-              rawDown={data?.counts_raw?.down}
-            />
+            {SHOW_DEPTH_BADGE && (
+              <SealedBadge
+                degraded={sealedDegrade.degraded}
+                hasDepth={sealedDegrade.hasDepth}
+                isHistorical={sealedDegrade.isHistorical}
+                sealedReady={sealedDegrade.sealedReady}
+                sealedCountsUp={data?.sealed_counts_up}
+                sealedCountsDown={data?.sealed_counts_down}
+                rawUp={data?.counts_raw?.up}
+                rawDown={data?.counts_raw?.down}
+              />
+            )}
             {/* 涨跌停切换(胶囊式): 点击切换方向, 当前方向有背景 */}
             <div className="flex items-center rounded-full bg-elevated/60 p-0.5">
               <button
@@ -1311,13 +1318,15 @@ export function LimitUpLadder() {
             ))}
 
             <div className="w-px h-4 bg-border mx-1" />
-            <button
-              onClick={() => setShowExtConfig(true)}
-              className="p-1.5 hover:bg-surface text-muted hover:text-accent"
-              title="配置"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-            </button>
+            {ENABLE_LADDER_CONFIG && (
+              <button
+                onClick={() => setShowExtConfig(true)}
+                className="p-1.5 hover:bg-surface text-muted hover:text-accent"
+                title="配置"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button
               onClick={() => refetch()}
               disabled={isFetching}
@@ -1387,7 +1396,7 @@ export function LimitUpLadder() {
 
       {/* 字段配置弹窗 */}
       <AnimatePresence>
-        {showExtConfig && (
+        {ENABLE_LADDER_CONFIG && showExtConfig && (
           <ExtConfigDialog
             fields={extFields}
             onSave={handleSaveExtFields}

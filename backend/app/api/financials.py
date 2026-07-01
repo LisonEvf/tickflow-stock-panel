@@ -1,7 +1,8 @@
-"""财务数据 API — 独立路由, Cap.FINANCIAL 门控。"""
+"""财务数据 API — 独立路由, 读取本地 OpenTDX 财务快照。"""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Request
@@ -11,7 +12,6 @@ from pydantic import BaseModel
 from app.services.financial_sync import get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
 from app.services import ai_reports
-from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
 
@@ -20,17 +20,18 @@ router = APIRouter(prefix="/api/financials", tags=["financials"])
 
 @router.get("/status")
 def financial_status(request: Request):
-    """返回各财务表的同步状态。无需 FINANCIAL 权限（前端根据 available 决定是否展示）。"""
-    capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
-        return {"available": False, "tables": {}}
-
+    """返回各财务表的本地状态。available 表示当前是否已有本地财务数据。"""
     data_dir = request.app.state.repo.store.data_dir
     tables = {}
+    parquet_mtimes = {}
 
     for table in ("metrics", "income", "balance_sheet", "cash_flow"):
         path = data_dir / "financials" / table / "part.parquet"
         if path.exists():
+            parquet_mtimes[table] = datetime.fromtimestamp(
+                path.stat().st_mtime,
+                tz=timezone.utc,
+            ).isoformat()
             try:
                 df = pl.read_parquet(path, columns=["symbol"])
                 tables[table] = {
@@ -44,9 +45,10 @@ def financial_status(request: Request):
 
     fs = getattr(request.app.state, "financial_scheduler", None)
     last_sync = fs.last_sync if fs else {}
+    last_sync = {**parquet_mtimes, **last_sync}
 
     return {
-        "available": True,
+        "available": any((info.get("rows") or 0) > 0 for info in tables.values()),
         "tables": tables,
         "last_sync": last_sync,
         # 服务端是否正在同步(手动触发)——前端据此显示"同步中"并防重复点击,
@@ -58,9 +60,6 @@ def financial_status(request: Request):
 @router.get("/metrics")
 def get_metrics(request: Request, symbol: str | None = None):
     """查询核心财务指标。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     df = get_financial_df(request.app.state.repo.store.data_dir, "metrics")
     if df.is_empty():
         return {"data": []}
@@ -72,9 +71,6 @@ def get_metrics(request: Request, symbol: str | None = None):
 @router.get("/income")
 def get_income(request: Request, symbol: str | None = None):
     """查询利润表。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     df = get_financial_df(request.app.state.repo.store.data_dir, "income")
     if df.is_empty():
         return {"data": []}
@@ -86,9 +82,6 @@ def get_income(request: Request, symbol: str | None = None):
 @router.get("/balance-sheet")
 def get_balance_sheet(request: Request, symbol: str | None = None):
     """查询资产负债表。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     df = get_financial_df(request.app.state.repo.store.data_dir, "balance_sheet")
     if df.is_empty():
         return {"data": []}
@@ -100,9 +93,6 @@ def get_balance_sheet(request: Request, symbol: str | None = None):
 @router.get("/cash-flow")
 def get_cash_flow(request: Request, symbol: str | None = None):
     """查询现金流量表。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     df = get_financial_df(request.app.state.repo.store.data_dir, "cash_flow")
     if df.is_empty():
         return {"data": []}
@@ -119,9 +109,6 @@ def sync_table(request: Request, table: str):
     同步在后台线程执行,全量同步需数分钟。本接口立即返回 started 状态,
     前端通过轮询 GET /status 的 syncing 字段观察进度。
     """
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
     if table not in valid_tables:
         raise HTTPException(400, f"invalid table: {table}, expected one of {valid_tables}")
@@ -150,9 +137,6 @@ async def analyze_financials(request: Request, req: AnalyzeRequest):
     逐 chunk 以 SSE 形式推给前端(JSON per line, 非 text/event-stream,
     以便前端用 ReadableStream 逐行解析,更简单可靠)。
     """
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     if not req.symbol:
         raise HTTPException(400, "symbol 不能为空")
 
@@ -185,18 +169,13 @@ class SaveReportRequest(BaseModel):
 
 @router.get("/reports")
 def list_reports(request: Request):
-    """获取全部历史报告(按时间降序,后端已裁剪到上限)。无需 FINANCIAL 能力读取列表元信息。"""
-    capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
-        return {"reports": []}
+    """获取全部历史报告(按时间降序,后端已裁剪到上限)。"""
     return {"reports": ai_reports.list_reports()}
 
 
 @router.post("/reports")
 def save_report(request: Request, req: SaveReportRequest):
     """保存一条报告。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
     report = ai_reports.save_report({
         "symbol": req.symbol,
         "name": req.name,
@@ -211,7 +190,5 @@ def save_report(request: Request, req: SaveReportRequest):
 @router.delete("/reports/{report_id}")
 def delete_report(request: Request, report_id: str):
     """删除一条报告。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
     ok = ai_reports.delete_report(report_id)
     return {"ok": ok}

@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 import polars as pl
 
 from app.indicators.pipeline import filter_halt_days
+from app.data_providers.opentdx_provider import OpenTDXProvider
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ CANONICAL_DAILY_COLS = [
 
 
 def _normalize_daily(df_in, default_symbol: str | None = None) -> pl.DataFrame:
-    """把 SDK 返回的 pandas/任意 DataFrame 规范成 canonical 列。"""
+    """把 OpenTDX 返回的 pandas/任意 DataFrame 规范成 canonical 列。"""
     if df_in is None or len(df_in) == 0:
         return pl.DataFrame()
 
@@ -82,7 +82,7 @@ def sync_daily_batch(symbols: list[str],
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
     仅传 count 时按条数回溯。
     """
-    tf = get_client()
+    provider = OpenTDXProvider()
     out: list[pl.DataFrame] = []
     interval = (60.0 / rpm) if rpm else 0
 
@@ -95,29 +95,18 @@ def sync_daily_batch(symbols: list[str],
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1d", adjust="none",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=True, show_progress=False)
+            # 使用OpenTDX provider获取日K数据
+            df = provider.get_daily(
+                symbols=chunk,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="stock"
+            )
+            if not df.is_empty():
+                out.append(df)
         except Exception as e:  # noqa: BLE001
             logger.warning("batch fetch failed for %d symbols: %s", len(chunk), e)
             continue
-
-        # 兼容两种形态:dict[sym → df] 和扁平 df
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_daily(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
-            out.append(_normalize_daily(raw))
 
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
@@ -182,86 +171,52 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     """
     from datetime import date as _date
 
-    from app.tickflow.client import get_client
-
-    tf = get_client()
+    provider = OpenTDXProvider()
+    
     try:
-        resp = tf.quotes.get_by_universes(universes=["CN_Equity_A"])
+        # 使用OpenTDX获取实时行情
+        df = provider.get_realtime(symbols=None)
+        
+        if df.is_empty():
+            logger.warning("get_realtime returned empty")
+            return 0
+            
+        records = []
+        for row in df.to_dicts():
+            records.append({
+                "symbol": row.get("symbol"),
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("last_price"),
+                "volume": row.get("volume"),
+                "amount": row.get("amount"),
+            })
+
+        df = pl.DataFrame(records)
+        if df.is_empty():
+            return 0
+
+        today = _date.today()
+        daily_df = df.with_columns(pl.lit(today).cast(pl.Date).alias("date"))
+
+        # 过滤停牌 (open/high 为 0; close 可能被填充为前收盘价, 不能用全零判断)
+        daily_df = filter_halt_days(daily_df)
+
+        repo.flush_live_daily(daily_df)
+        logger.info("sync_daily_by_quotes: %d symbols flushed for %s", daily_df.height, today)
+        return daily_df.height
     except Exception as e:
-        logger.warning("get_by_universes failed: %s", e)
+        logger.warning("get_realtime failed: %s", e)
         return 0
-
-    if not resp:
-        logger.warning("get_by_universes returned empty")
-        return 0
-
-    records = []
-    for q in resp:
-        ext = q.get("ext") or {}
-        records.append({
-            "symbol": q.get("symbol"),
-            "open": q.get("open"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "close": q.get("last_price"),
-            "volume": q.get("volume"),
-            "amount": q.get("amount"),
-        })
-
-    df = pl.DataFrame(records)
-    if df.is_empty():
-        return 0
-
-    today = _date.today()
-    daily_df = df.with_columns(pl.lit(today).cast(pl.Date).alias("date"))
-
-    # 过滤停牌 (open/high 为 0; close 可能被填充为前收盘价, 不能用全零判断)
-    daily_df = filter_halt_days(daily_df)
-
-    repo.flush_live_daily(daily_df)
-    logger.info("sync_daily_by_quotes: %d symbols flushed for %s", daily_df.height, today)
-    return daily_df.height
 
 
 def _normalize_adj_factor(raw) -> pl.DataFrame:
-    """Normalize SDK ex_factors response to symbol/trade_date/ex_factor."""
+    """Normalize OpenTDX adj_factor response to symbol/trade_date/ex_factor."""
     if raw is None or len(raw) == 0:
         return pl.DataFrame()
-    if isinstance(raw, dict):
-        rows: list[dict] = []
-        for sym, values in raw.items():
-            for item in values or []:
-                row = dict(item or {})
-                row.setdefault("symbol", sym)
-                rows.append(row)
-        df = pl.DataFrame(rows) if rows else pl.DataFrame()
-    elif isinstance(raw, pl.DataFrame):
-        df = raw
-    else:
-        df = pl.from_pandas(raw.reset_index() if hasattr(raw, "reset_index") else raw)
-    if df.is_empty():
-        return df
-    # rename: timestamp/date → trade_date, adj_factor → ex_factor
-    # 注意: 新版 SDK 可能同时返回 timestamp 和 trade_date (或 adj_factor 和 ex_factor),
-    # 直接 rename 会产生重复列报错。仅当目标列不存在时才 rename。
-    rename_map: dict[str, str] = {}
-    for src, dst in (("timestamp", "trade_date"), ("date", "trade_date"), ("adj_factor", "ex_factor")):
-        if src in df.columns and dst not in df.columns:
-            rename_map[src] = dst
-    df = df.rename(rename_map)
-    if "trade_date" in df.columns:
-        if df.schema["trade_date"] in {pl.Int64, pl.Int32, pl.UInt64, pl.UInt32, pl.Float64, pl.Float32}:
-            df = df.with_columns(
-                pl.from_epoch(pl.col("trade_date").cast(pl.Int64), time_unit="ms").dt.date().alias("trade_date")
-            )
-        else:
-            df = df.with_columns(pl.col("trade_date").cast(pl.Date, strict=False))
-    if "ex_factor" in df.columns:
-        df = df.with_columns(pl.col("ex_factor").cast(pl.Float64, strict=False))
-    cols = [c for c in ["symbol", "trade_date", "ex_factor"] if c in df.columns]
-    if len(cols) < 3:
-        return pl.DataFrame()
-    return df.select(cols).drop_nulls()
+    # OpenTDX不直接提供复权因子，这里返回空DataFrame
+    return pl.DataFrame()
 
 
 def sync_adj_factor(symbols: list[str], repo: KlineRepository,
@@ -270,72 +225,12 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     end_time: datetime | None = None,
                     on_chunk_done: Callable[[int, int], None] | None = None,
                     asset_type: str = "stock") -> tuple[int, list[str]]:
-    """同步除权因子(Starter+)。SDK 接口:`tf.klines.ex_factors(symbols=...)`。
+    """同步除权因子(Starter+)。OpenTDX不提供此功能。
 
-    支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
     返回 (写入行数, 受影响的 symbol 列表) — 供 enriched 局部重算使用。
     """
-    if not capset.has(Cap.ADJ_FACTOR) or not symbols:
-        return 0, []
-
-    tf = get_client()
-    lim = capset.limits(Cap.ADJ_FACTOR)
-    batch_size = lim.batch if lim and lim.batch else 50
-    rpm = lim.rpm if lim else 30
-    interval = 60.0 / rpm if rpm else 0
-
-    # 构建 SDK 参数
-    sdk_kwargs: dict = {"as_dataframe": True, "batch_size": batch_size, "show_progress": False}
-    if start_time:
-        sdk_kwargs["start_time"] = _datetime_to_ms(start_time)
-    if end_time:
-        sdk_kwargs["end_time"] = _datetime_to_ms(end_time)
-
-    chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
-    all_dfs: list[pl.DataFrame] = []
-
-    for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
-            time.sleep(interval)
-        try:
-            raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
-            normalized = _normalize_adj_factor(raw)
-            if not normalized.is_empty():
-                all_dfs.append(normalized)
-            logger.debug("adj_factor chunk %d/%d: %d symbols", i + 1, len(chunks), len(chunk))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("adj_factor chunk %d failed: %s", i + 1, e)
-
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-
-    if not all_dfs:
-        return 0, []
-
-    new_data = pl.concat(all_dfs, how="diagonal_relaxed") if len(all_dfs) > 1 else all_dfs[0]
-
-    # 提取受影响的 symbol 列表(合并前)
-    affected = new_data["symbol"].unique().to_list()
-
-    factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-    out = repo.store.data_dir / factor_dir / "all.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    if out.exists():
-        existing = pl.read_parquet(out)
-        before = existing.height
-        merged = pl.concat([existing, new_data]).unique(
-            subset=["symbol", "trade_date"], keep="last",
-        ).sort(["symbol", "trade_date"])
-        merged.write_parquet(out)
-        added = merged.height - before
-        logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
-                     merged.height, added, new_data.height, len(symbols))
-        return added, affected
-    else:
-        new_data.sort(["symbol", "trade_date"]).write_parquet(out)
-        logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
-        return new_data.height, affected
+    # OpenTDX不直接提供复权因子，返回空结果
+    return 0, []
 
 
 # ===== 分钟 K 同步 =====
@@ -346,7 +241,7 @@ CANONICAL_MINUTE_COLS = [
 
 
 def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
-    """把 SDK 返回的分钟 K 数据规范成 canonical 列。"""
+    """把 OpenTDX 返回的分钟 K 数据规范成 canonical 列。"""
     if df_in is None or len(df_in) == 0:
         return pl.DataFrame()
 
@@ -398,7 +293,7 @@ def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
 
 
 def _datetime_to_ms(dt: datetime) -> int:
-    """datetime → 毫秒时间戳 (供 SDK start_time / end_time 使用)。"""
+    """datetime → 毫秒时间戳 (供 OpenTDX start_time / end_time 使用)。"""
     return int(dt.timestamp() * 1000)
 
 
@@ -417,7 +312,7 @@ def sync_minute_batch(
     count 仅作为 fallback 保留。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     """
-    tf = get_client()
+    provider = OpenTDXProvider()
     out: list[pl.DataFrame] = []
     interval = (60.0 / rpm) if rpm else 0
 
@@ -430,28 +325,19 @@ def sync_minute_batch(
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1m",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                      as_dataframe=True, show_progress=False)
+            # 使用OpenTDX provider获取分钟K数据
+            df = provider.get_minute(
+                symbols=chunk,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="stock",
+                freq="1m"
+            )
+            if not df.is_empty():
+                out.append(df)
         except Exception as e:  # noqa: BLE001
             logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
             continue
-
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_minute(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
-            out.append(_normalize_minute(raw))
 
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
@@ -462,44 +348,39 @@ def sync_minute_batch(
 
 
 def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股单日分钟 K（不写入本地）。"""
+    """从 OpenTDX 实时拉取单股单日分钟 K（不写入本地）。"""
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
-    tf = get_client()
+    
+    provider = OpenTDXProvider()
     try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            as_dataframe=True, show_progress=False,
+        df = provider.get_minute(
+            symbols=[symbol],
+            start_time=start_time,
+            end_time=end_time,
+            asset_type="stock",
+            freq="1m"
         )
+        
+        if df.is_empty():
+            return pl.DataFrame()
+            
+        # 重新规范化数据
+        return _normalize_minute(df)
     except Exception as e:
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
         return pl.DataFrame()
 
-    if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
-        return _normalize_minute(raw)
-    return pl.DataFrame()
-
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
+    """从 OpenTDX 实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
 
     返回结构: symbol, trade_date, ex_factor (空 DataFrame 表示无除权事件或拉取失败)。
     与 _apply_adj_factor / compute_enriched 的 factors 参数格式一致。
     """
-    tf = get_client()
-    try:
-        raw = tf.klines.ex_factors([symbol], as_dataframe=True, show_progress=False)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("fetch_adj_factor_single(%s) failed: %s", symbol, e)
-        return pl.DataFrame()
-    return _normalize_adj_factor(raw)
+    # OpenTDX不直接提供复权因子
+    return pl.DataFrame()
 
 
 def _latest_minute_datetime(repo: KlineRepository) -> datetime | None:

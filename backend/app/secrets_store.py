@@ -62,11 +62,8 @@ def clear(*keys: str) -> dict:
 
 def get_tickflow_key() -> str:
     """取当前 TickFlow Key:secrets.json 优先,否则 .env。"""
-    val = load().get("tickflow_api_key")
-    if val:
-        return val
-    from app.config import settings
-    return settings.tickflow_api_key or ""
+    # TickFlow已移除，返回空字符串
+    return ""
 
 
 def get_ai_key() -> str:

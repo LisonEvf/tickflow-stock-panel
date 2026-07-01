@@ -80,6 +80,31 @@ def _score(value: float, low: float, high: float) -> int:
     return max(0, min(100, round((value - low) / (high - low) * 100)))
 
 
+def _limit_pct(symbol: str) -> float:
+    if symbol.startswith(("300", "301", "688", "689")):
+        return 0.20
+    if symbol.endswith(".BJ"):
+        return 0.30
+    return 0.10
+
+
+def _limit_price(prev_close: float, pct: float, up: bool) -> float:
+    sign = 1 if up else -1
+    cents = math.floor(prev_close * 100 + 0.5)
+    numerator = int((1 + sign * pct) * 100)
+    return ((cents * numerator + 50) // 100) / 100
+
+
+def _limit_hit(row: dict, *, up: bool, price_key: str = "close") -> bool:
+    prev_close = _finite(row.get("prev_close"))
+    price = _finite(row.get(price_key))
+    symbol = str(row.get("symbol") or "")
+    if prev_close in (None, 0) or price in (None, 0) or not symbol:
+        return False
+    target = _limit_price(prev_close, _limit_pct(symbol), up=up)
+    return abs(price - target) < 0.005
+
+
 # ================================================================
 # 指数行情(实时 quote_service 优先,回退 kline_index_daily SQL)
 # ================================================================
@@ -301,6 +326,19 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
     return {"leading": leading, "lagging": lagging}
 
 
+def _has_dimension_rank(rank: dict) -> bool:
+    return bool(rank.get("leading") or rank.get("lagging"))
+
+
+def _openkpl_dimension_rank(kind: str, limit: int = 5) -> dict:
+    try:
+        from app.services.openkpl_rank import get_realtime_rank
+
+        return get_realtime_rank(kind, limit=limit)
+    except Exception:  # noqa: BLE001
+        return {"leading": [], "lagging": []}
+
+
 # ================================================================
 # Top 行 / 涨跌幅分桶
 # ================================================================
@@ -367,9 +405,35 @@ def build_market_overview(
         as_of: 指定日期,None 则取最新有数据日。
     """
     svc = ScreenerService(repo)
-    as_of = as_of or svc.latest_date()
+    requested_as_of = as_of
     status = _quote_status(quote_service)
-    indices = _index_quotes(repo, quote_service, as_of)
+    live_df = pl.DataFrame()
+    live_date: date | None = None
+
+    if requested_as_of is None and quote_service:
+        try:
+            live_df, live_date = quote_service.get_enriched_today()
+            if live_df.is_empty():
+                live_df = quote_service.get_quotes_compat()
+                live_date = date.today() if not live_df.is_empty() else None
+        except Exception:  # noqa: BLE001
+            live_df = pl.DataFrame()
+            live_date = None
+
+        if live_df.is_empty():
+            try:
+                quote_service.refresh()
+                status = _quote_status(quote_service)
+                live_df, live_date = quote_service.get_enriched_today()
+                if live_df.is_empty():
+                    live_df = quote_service.get_quotes_compat()
+                    live_date = date.today() if not live_df.is_empty() else None
+            except Exception:  # noqa: BLE001
+                live_df = pl.DataFrame()
+                live_date = None
+
+    as_of = requested_as_of or live_date or svc.latest_date()
+    indices = _index_quotes(repo, quote_service, requested_as_of)
 
     if not as_of:
         return {
@@ -393,23 +457,33 @@ def build_market_overview(
             "industry_rank": {"leading": [], "lagging": []},
         }
 
-    df = svc._load_enriched_for_date(as_of)
+    if requested_as_of is None and not live_df.is_empty() and live_date == as_of:
+        df = live_df
+    else:
+        df = svc._load_enriched_for_date(as_of)
     if df.is_empty():
         rows: list[dict] = []
     else:
         cols = [
-            "symbol", "name", "close", "change_pct", "amount", "turnover_rate", "volume",
+            "symbol", "name", "close", "prev_close", "high", "low", "change_pct", "amount", "turnover_rate", "volume",
             "vol_ratio_5d", "consecutive_limit_ups", "signal_limit_up", "signal_broken_limit_up", "signal_limit_down",
             "ma5", "ma20", "ma60", "high_60d", "low_60d", "signal_n_day_high", "signal_n_day_low",
         ]
         df = df.select([c for c in cols if c in df.columns])
         rows = df.to_dicts()
 
-    # 过滤真停牌（volume=0 且 change_pct=0），保留有涨跌幅的浮点误差股以对齐同花顺口径
+    # 过滤真停牌（volume=0 且 change_pct=0）。未开盘时 OpenTDX 可能全市场
+    # volume=0/change_pct=0 但 close=pre_close，此时应保留这些真实昨收报价。
     if rows and "volume" in rows[0]:
-        rows = [r for r in rows
-                if (_finite(r.get("volume")) or 0) > 0
-                or (_finite(r.get("change_pct")) or 0) != 0]
+        active_rows = [
+            r for r in rows
+            if (_finite(r.get("volume")) or 0) > 0
+            or (_finite(r.get("change_pct")) or 0) != 0
+        ]
+        if active_rows:
+            rows = active_rows
+        else:
+            rows = [r for r in rows if (_finite(r.get("close")) or 0) > 0]
 
     total = len(rows)
     up = sum(1 for r in rows if (_finite(r.get("change_pct")) or 0) > 0)
@@ -429,10 +503,29 @@ def build_market_overview(
     strong_up = sum(1 for v in pct_values if v >= 0.03)
     strong_down = sum(1 for v in pct_values if v <= -0.03)
 
-    limit_up = sum(1 for r in rows if bool(r.get("signal_limit_up")) or (_finite(r.get("consecutive_limit_ups")) or 0) > 0)
-    broken = sum(1 for r in rows if bool(r.get("signal_broken_limit_up")))
-    limit_down = sum(1 for r in rows if bool(r.get("signal_limit_down")))
-    max_boards = max([int(_finite(r.get("consecutive_limit_ups")) or 0) for r in rows], default=0)
+    def limit_up_boards(row: dict) -> int:
+        existing = int(_finite(row.get("consecutive_limit_ups")) or 0)
+        if existing > 0:
+            return existing
+        if bool(row.get("signal_limit_up")) or _limit_hit(row, up=True, price_key="close"):
+            return 1
+        return 0
+
+    def is_broken_limit_up(row: dict) -> bool:
+        if bool(row.get("signal_broken_limit_up")):
+            return True
+        if limit_up_boards(row) > 0:
+            return False
+        return _limit_hit(row, up=True, price_key="high")
+
+    def is_limit_down(row: dict) -> bool:
+        return bool(row.get("signal_limit_down")) or _limit_hit(row, up=False, price_key="close")
+
+    board_counts = [limit_up_boards(r) for r in rows]
+    limit_up = sum(1 for n in board_counts if n > 0)
+    broken = sum(1 for r in rows if is_broken_limit_up(r))
+    limit_down = sum(1 for r in rows if is_limit_down(r))
+    max_boards = max(board_counts, default=0)
 
     # 五档 sealed 修正: 假涨停/假跌停不计入(需 Pro+ depth5.batch 能力)
     sealed_ready = False
@@ -483,8 +576,7 @@ def build_market_overview(
         b["up_pct"] = b["up"] / count * 100
 
     tiers_map: dict[int, int] = {}
-    for r in rows:
-        n = int(_finite(r.get("consecutive_limit_ups")) or 0)
+    for n in board_counts:
         if n > 0:
             tiers_map[n] = tiers_map.get(n, 0) + 1
     tiers = [{"boards": k, "count": v} for k, v in sorted(tiers_map.items(), key=lambda item: -item[0])]
@@ -499,6 +591,11 @@ def build_market_overview(
 
     concept_rank = _dimension_rank(rows, repo, "concept")
     industry_rank = _dimension_rank(rows, repo, "industry", level=2)
+    if requested_as_of is None:
+        if not _has_dimension_rank(concept_rank):
+            concept_rank = _openkpl_dimension_rank("concept")
+        if not _has_dimension_rank(industry_rank):
+            industry_rank = _openkpl_dimension_rank("industry")
 
     strong_diff_pct = (strong_up - strong_down) / total * 100 if total else 0
     high_vol_pct = high_vol_ratio / total * 100 if total else 0

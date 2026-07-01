@@ -83,6 +83,43 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
     return out
 
 
+def _fallback_index_quotes_from_opentdx(symbols: list[str] | None = None) -> list[dict]:
+    """实时指数缓存为空时，直接用 OpenTDX 拉核心指数。"""
+    wanted = set(symbols or [])
+    try:
+        from app.api.overview import CORE_INDEX_NAMES
+        from app.tickflow.client import get_paid_realtime_client
+
+        rows = get_paid_realtime_client().quotes.get_by_universes(["CN_Index"])
+    except Exception:  # noqa: BLE001
+        return []
+
+    out: list[dict] = []
+    for row in rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if wanted and symbol not in wanted:
+            continue
+        last_price = row.get("last_price", row.get("close"))
+        prev_close = row.get("prev_close")
+        change_amount = row.get("change_amount")
+        change_pct = row.get("change_pct")
+        if change_amount is None and last_price is not None and prev_close not in (None, 0):
+            change_amount = float(last_price) - float(prev_close)
+        if change_pct is None and change_amount is not None and prev_close not in (None, 0):
+            change_pct = float(change_amount) / float(prev_close)
+        out.append({
+            "symbol": symbol,
+            "name": CORE_INDEX_NAMES.get(symbol),
+            "last_price": float(last_price) if last_price is not None else None,
+            "close": float(last_price) if last_price is not None else None,
+            "prev_close": float(prev_close) if prev_close is not None else None,
+            "change_amount": float(change_amount) if change_amount is not None else None,
+            "change_pct": float(change_pct) * 100 if change_pct is not None else None,
+            "source": "opentdx",
+        })
+    return out
+
+
 @router.get("/status")
 def status(request: Request):
     """行情状态 (来自全局 QuoteService)。"""
@@ -102,11 +139,17 @@ def index_quotes(
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     qs = _get_quote_service(request)
     if not qs:
+        rows = _fallback_index_quotes_from_opentdx(symbol_list)
+        if rows:
+            return {"rows": rows, "count": len(rows), "source": "opentdx"}
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     df = qs.get_index_quotes(symbol_list)
     rows = df.to_dicts() if not df.is_empty() else []
     if not rows:
+        rows = _fallback_index_quotes_from_opentdx(symbol_list)
+        if rows:
+            return {"rows": rows, "count": len(rows), "source": "opentdx"}
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     return {"rows": rows, "count": len(rows), "source": "realtime"}

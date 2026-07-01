@@ -16,7 +16,6 @@ import {
   AlertTriangle,
   Info,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
 import { EndpointTestDialog } from '@/components/EndpointTestDialog'
 import { api, type ExtDataConfig } from '@/lib/api'
 import {
@@ -27,7 +26,7 @@ import {
   useQuoteInterval,
   useDataStatus,
 } from '@/lib/useSharedQueries'
-import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
+import { useUpdateQuoteInterval } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/format'
@@ -184,9 +183,7 @@ export function Data() {
   const quoteInterval = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
 
-  const realtimeEnabled = prefs.data?.realtime_quotes_enabled ?? false
   const quoteStatus = useQuoteStatus()
-  const toggleQuote = useToggleRealtimeQuotes()
 
   const hasAdjCap = !!caps.data?.capabilities?.['adj_factor']
   const hasDailyBatchCap = !!caps.data?.capabilities?.['kline.daily.batch']
@@ -549,17 +546,12 @@ export function Data() {
       />
 
       <div className="px-8 py-6 space-y-6 max-w-6xl">
-        {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
+        {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K */}
         {isNoKey && (
           <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
             <Info className="h-4 w-4 shrink-0 text-muted" />
             <span className="text-secondary leading-relaxed">
-              当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
-              配置 API Key 可解锁实时行情监控等扩展能力,前往
-              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
-                配置
-              </Link>
-              。
+              当前将使用内置数据通道获取历史日K(无需注册)。
             </span>
           </div>
         )}
@@ -582,7 +574,6 @@ export function Data() {
         {/* 实时行情 + 存储 + 调度 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <QuoteConfigCard
-            enabled={realtimeEnabled}
             running={quoteStatus.data?.running ?? false}
             isTrading={quoteStatus.data?.is_trading_hours ?? false}
             lastFetchMs={quoteStatus.data?.last_fetch_ms ?? null}
@@ -590,8 +581,6 @@ export function Data() {
             intervalMin={quoteInterval.data?.min_interval ?? 5}
             intervalMax={quoteInterval.data?.max_interval ?? 60}
             loading={quoteStatus.isLoading}
-            onToggle={(v) => toggleQuote.mutate(v)}
-            toggling={toggleQuote.isPending}
             showIntervalEdit={showIntervalEdit}
             onShowIntervalEdit={handleToggleIntervalEdit}
             onIntervalChange={(v) => updateInterval.mutate(v)}

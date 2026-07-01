@@ -3,10 +3,10 @@
  *
  * 通过 URL query param ?tab=xxx 同步 Tab 状态。
  */
+import { useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { BarChart3, Key, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
-import { SettingsKeysPanel } from './settings/Keys'
+import { BarChart3, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
 import { SettingsExtPagesPanel } from './settings/ExtPages'
@@ -19,7 +19,6 @@ import { cn } from '@/lib/cn'
 // ===== Tab 定义 =====
 
 const TABS = [
-  { key: 'account',    label: 'TickFlow',   icon: Key,       panel: SettingsKeysPanel },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },
   { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel },
@@ -36,11 +35,17 @@ export function Settings() {
   const activeTab = TABS.find((t) => t.key === tabParam) ?? TABS[0]
   const highlight = searchParams.get('highlight') ?? ''
 
+  useEffect(() => {
+    if (tabParam && !TABS.some((t) => t.key === tabParam)) {
+      setSearchParams({ tab: 'ai' }, { replace: true })
+    }
+  }, [tabParam, setSearchParams])
+
   return (
     <>
       <PageHeader
         title="设置"
-        subtitle="管理账户、数据刷新策略和高级功能配置。"
+        subtitle="管理 AI、实时监控、扩展页面和系统偏好。"
       />
 
       <div className="px-8 py-6">

@@ -1,1 +1,1 @@
-"""TickFlow 适配层 — 能力探测 / 调度 / Repository。"""
+"""Compatibility package for legacy app.tickflow imports."""

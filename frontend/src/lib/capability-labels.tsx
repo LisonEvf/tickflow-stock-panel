@@ -17,7 +17,7 @@ export const CAP_LABELS: Record<string, { name: string; hint: string }> = {
 // 套餐等级 —— 用于按档位门控功能(如专线端点 / 按月扩展分钟K)。
 // 基础档提取与后端 quote_service.py 一致:取 label 第一个词("Pro +" → "pro")。
 // none = None 档(无 key / 无效 key),低于 free,仅历史日K无实时行情。
-export const TIER_RANK: Record<string, number> = { none: -1, free: 0, starter: 1, pro: 2, expert: 3 }
+export const TIER_RANK: Record<string, number> = { none: -1, free: 0, starter: 1, pro: 2, opentdx: 2, expert: 3 }
 export const EXPERT_RANK = TIER_RANK.expert
 
 export function tierRank(label: string): number {
@@ -62,6 +62,12 @@ const TIER_STYLE: Record<string, TierStyle> = {
     dotStyle: { background: 'linear-gradient(135deg, #a855f7, #7c3aed)' },
     labelTextStyle: { background: 'linear-gradient(135deg, #c084fc, #a855f7)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
   },
+  opentdx: {
+    desc: '本地 OpenTDX · 无需 Key',
+    tagBg: { background: 'linear-gradient(135deg, rgba(20,184,166,0.22), rgba(59,130,246,0.16))' },
+    dotStyle: { background: 'linear-gradient(135deg, #14b8a6, #3b82f6)' },
+    labelTextStyle: { background: 'linear-gradient(135deg, #5eead4, #60a5fa)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
+  },
   expert: {
     desc: 'WebSocket · 财务数据',
     tagBg: { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(168,85,247,0.2), rgba(245,158,11,0.2))' },
@@ -81,7 +87,7 @@ export function tierStyle(label: string): TierStyle {
 }
 
 /** 所有档位(有序, 供档位列表渲染) */
-export const ALL_TIERS = ['none', 'free', 'starter', 'pro', 'expert'] as const
+export const ALL_TIERS = ['none', 'free', 'starter', 'pro', 'opentdx', 'expert'] as const
 
 /** 返回档位标签的渐变文字样式(用于大字显示, 如 Keys 页档位) */
 export function tierTextStyle(label: string): { color?: string; background?: string; WebkitBackgroundClip?: string; backgroundClip?: string } {
@@ -93,7 +99,7 @@ export function TierTag({ label, className = '' }: { label: string; className?: 
   const t = tierStyle(label)
   const base = tierBaseName(label)
   // none 档显示英文「None」,其余档显示英文档名
-  const display = base === 'none' ? 'None' : base
+  const display = base === 'none' ? 'None' : base === 'opentdx' ? 'OpenTDX' : base
   return (
     <span
       className={`inline-flex h-[18px] max-w-[80px] shrink-0 items-center overflow-hidden rounded px-1.5 text-[10px] font-bold font-mono leading-none ${className}`}
@@ -103,4 +109,3 @@ export function TierTag({ label, className = '' }: { label: string; className?: 
     </span>
   )
 }
-

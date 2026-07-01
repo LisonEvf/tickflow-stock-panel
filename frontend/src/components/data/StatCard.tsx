@@ -18,7 +18,7 @@ export const CARD_META: Record<string, {
   // ETF 复用日K批量能力(免费档 kline.daily.batch 即可),不显示档位徽章
   etf:         { capKey: 'kline.daily.batch',       tierReq: '' },
   minute:      { capKey: 'kline.minute.batch',      tierReq: 'Pro+' },
-  financials:  { capKey: 'financial',                tierReq: 'Expert' },
+  financials:  { capKey: 'financial',                tierReq: '' },
 }
 
 export function Pill({ label, value }: { label: string; value: number | string }) {

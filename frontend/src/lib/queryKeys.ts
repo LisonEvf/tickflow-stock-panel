@@ -34,6 +34,7 @@ export const QK = {
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
+  openkplPlateAnalysis: (kind: 'concept' | 'industry') => ['openkpl-plate-analysis', kind] as const,
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,

@@ -430,40 +430,41 @@ function RankColumn({ title, rows, tone }: { title: string; rows: OverviewDimens
   return (
     <div className="min-w-0 space-y-1">
       <div className={`text-[10px] font-medium ${tone === 'bull' ? 'text-bull' : 'text-bear'}`}>{title}</div>
-      {rows.slice(0, 5).map((r, idx) => (
-        <div key={`${title}-${r.name}-${idx}`} className="grid grid-cols-[14px_1fr_auto] items-center gap-1 rounded bg-elevated/40 px-1.5 py-1">
-          <span className="text-center font-mono text-[9px] text-muted">{idx + 1}</span>
-          <div className="min-w-0">
-            <div className="truncate text-[11px] text-foreground" title={r.name}>{r.name}</div>
-            <div className="truncate text-[9px] text-muted">{r.count}只 · {r.leader?.name ?? '—'}</div>
+      {rows.slice(0, 5).map((r, idx) => {
+        const isOpenKpl = r.source === 'openkpl'
+        const detail = isOpenKpl
+          ? `实时排行 · 成交 ${fmtBigNum(r.amount)}`
+          : `${r.count}只 · ${r.leader?.name ?? '—'}`
+        return (
+          <div key={`${title}-${r.name}-${idx}`} className="grid grid-cols-[14px_1fr_auto] items-center gap-1 rounded bg-elevated/40 px-1.5 py-1">
+            <span className="text-center font-mono text-[9px] text-muted">{idx + 1}</span>
+            <div className="min-w-0">
+              <div className="truncate text-[11px] text-foreground" title={r.name}>{r.name}</div>
+              <div className="truncate text-[9px] text-muted">{detail}</div>
+            </div>
+            <div className={`font-mono text-[10px] font-semibold ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
           </div>
-          <div className={`font-mono text-[10px] font-semibold ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
-        </div>
-      ))}
+        )
+      })}
       {rows.length === 0 && <div className="rounded border border-dashed border-border py-4 text-center text-xs text-muted">暂无数据</div>}
     </div>
   )
 }
 
-function HotRankCard({ title, rank, configUrl }: { title: string; rank?: OverviewMarket['concept_rank']; configUrl: string }) {
+function HotRankCard({ title, rank }: { title: string; rank?: OverviewMarket['concept_rank'] }) {
   const hasData = (rank?.leading?.length ?? 0) > 0 || (rank?.lagging?.length ?? 0) > 0
+  const isRealtimeRank = [...(rank?.leading ?? []), ...(rank?.lagging ?? [])].some((r) => r.source === 'openkpl')
   return (
     <section className="rounded-card border border-border bg-surface/80 p-2.5">
-      <SectionTitle icon={Flame} title={title} hint="领涨/领跌" />
+      <SectionTitle icon={Flame} title={title} hint={isRealtimeRank ? '实时排行' : '领涨/领跌'} />
       {hasData ? (
-        <div className="grid grid-cols-2 gap-2">
-          <RankColumn title="领涨" rows={rank?.leading ?? []} tone="bull" />
-          <RankColumn title="领跌" rows={rank?.lagging ?? []} tone="bear" />
+        <div className={isRealtimeRank ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2'}>
+          <RankColumn title={isRealtimeRank ? '实时强度' : '领涨'} rows={rank?.leading ?? []} tone="bull" />
+          {!isRealtimeRank && <RankColumn title="领跌" rows={rank?.lagging ?? []} tone="bear" />}
         </div>
       ) : (
         <div className="py-4 text-center">
-          <p className="text-[11px] text-muted">未配置扩展数据源</p>
-          <Link
-            to={configUrl}
-            className="mt-1.5 inline-block text-[11px] text-accent hover:text-accent/80 transition-colors"
-          >
-            前往配置 →
-          </Link>
+          <p className="text-[11px] text-muted">等待扩展数据同步</p>
         </div>
       )}
     </section>
@@ -582,7 +583,6 @@ export function Dashboard() {
   const strongDown = data.breadth.strong_down ?? 0
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
-  const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
   // 实时模式: none / watchlist / full_market。
   // watchlist (Free 档) 仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
@@ -642,7 +642,7 @@ export function Dashboard() {
             <span className="font-mono text-secondary">—</span>
           )}
           <span className="flex items-center gap-1"><Timer className="h-3 w-3" />{quoteAge(data.quote_status?.quote_age_ms)}</span>
-          <span className={quoteRunning ? 'text-accent' : 'text-warning'}>{quoteRunning ? '实时' : '非实时'}</span>
+          <span className="text-accent">实时</span>
           <button
             onClick={handleRefresh}
             disabled={manualFetching}
@@ -728,8 +728,8 @@ export function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" />
-            <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" />
+            <HotRankCard title="概念热度" rank={data.concept_rank} />
+            <HotRankCard title="行业热度" rank={data.industry_rank} />
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -790,7 +790,7 @@ function FetchDataCard({
           </p>
           {isNoKey && (
             <p className="mt-1 text-[11px] text-warning/80 leading-relaxed">
-              ⓘ 无需 API Key,当前为 None 档即可获取历史日K,可制定策略+回测。配置免费 Key 可解锁实时行情监控能力。
+              ⓘ 无需 API Key,系统会使用内置数据通道获取历史日K,可制定策略+回测。
             </p>
           )}
 

@@ -72,9 +72,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # TickFlow
-    tickflow_api_key: str = Field(default="", description="留空启用 free 模式")
-
+ 
     # AI
     ai_provider: str = "openai_compat"
     ai_base_url: str = "https://api.alysc.top"
@@ -117,11 +115,6 @@ class Settings(BaseSettings):
             self.data_dir = (_PROJECT_ROOT / self.data_dir).resolve()
         return self
 
-    @property
-    def use_free_mode(self) -> bool:
-        """是否走 Free 模式。优先看 secrets.json,其次看 .env。"""
-        from app import secrets_store
-        return not secrets_store.get_tickflow_key()
-
+ 
 
 settings = Settings()

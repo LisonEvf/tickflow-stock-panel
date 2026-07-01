@@ -20,13 +20,57 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.indicators.pipeline import compute_enriched
 from app.indicators.levels import compute_levels, summarize_levels
+from app.services import kline_sync
 from app.services import stock_reports
 from app.services.stock_analyzer import analyze_stock_stream
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stock-analysis", tags=["stock-analysis"])
+
+
+def _empty_levels_response(symbol: str) -> dict:
+    return {
+        "levels": {
+            "sr": [], "pivot": [], "extreme": [],
+            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
+            "atr_stop": [], "gap": [], "fib": [], "round": [],
+        },
+        "close": None,
+        "summary": "无数据",
+        "symbol": symbol,
+        "dates": [],
+        "series": {},
+    }
+
+
+def _load_daily_for_levels(request: Request, symbol: str, days: int) -> pl.DataFrame:
+    repo = request.app.state.repo
+    end = date.today()
+    start = end - timedelta(days=days * 2)
+    df = repo.get_daily(symbol, start, end)
+    if not df.is_empty():
+        return df
+
+    raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
+    if raw.is_empty():
+        return raw
+
+    factors = pl.DataFrame()
+    capset = getattr(request.app.state, "capabilities", None)
+    try:
+        from app.tickflow.capabilities import Cap
+        if capset and capset.has(Cap.ADJ_FACTOR):
+            factors = kline_sync.fetch_adj_factor_single(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
+
+    enriched = compute_enriched(raw, factors=factors)
+    if "date" in enriched.columns:
+        enriched = enriched.sort("date")
+    return enriched.tail(days)
 
 
 def _to_float_list(series: pl.Series) -> list:
@@ -118,16 +162,9 @@ def get_levels(
     if not symbol:
         raise HTTPException(400, "symbol 不能为空")
 
-    repo = request.app.state.repo
-    end = date.today()
-    start = end - timedelta(days=days * 2)
-    df = repo.get_daily(symbol, start, end)
+    df = _load_daily_for_levels(request, symbol, days)
     if df.is_empty():
-        return {"levels": {"sr": [], "pivot": [], "extreme": [],
-                           "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
-                           "atr_stop": [], "gap": [], "fib": [], "round": []},
-                "close": None, "summary": "无数据", "symbol": symbol,
-                "dates": [], "series": {}}
+        return _empty_levels_response(symbol)
 
     levels = compute_levels(df)
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None

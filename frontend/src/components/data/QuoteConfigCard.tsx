@@ -3,8 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Activity, Settings } from 'lucide-react'
 import { Skeleton } from './Skeleton'
 
-export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, intervalS, intervalMin, intervalMax, loading, onToggle, toggling, showIntervalEdit, onShowIntervalEdit, onIntervalChange }: {
-  enabled: boolean
+export function QuoteConfigCard({ running, isTrading, lastFetchMs, intervalS, intervalMin, intervalMax, loading, showIntervalEdit, onShowIntervalEdit, onIntervalChange }: {
   running: boolean
   isTrading: boolean
   lastFetchMs: number | null
@@ -12,25 +11,17 @@ export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, inte
   intervalMin: number
   intervalMax: number
   loading: boolean
-  onToggle: (enabled: boolean) => void
-  toggling: boolean
   showIntervalEdit: boolean
   onShowIntervalEdit: () => void
   onIntervalChange: (v: number) => void
 }) {
   const statusColor = running && isTrading
     ? 'bg-accent shadow-[0_0_6px_rgba(61,214,140,0.5)]'
-    : enabled && running
+    : running
       ? 'bg-warning/60'
       : 'bg-muted'
 
-  const statusText = !enabled
-    ? '已关闭'
-    : !isTrading
-      ? '非交易时段'
-      : running
-        ? '行情运行中'
-        : '已停止'
+  const statusText = running ? '实时轮询中' : '启动中'
 
   const lastFetchTime = lastFetchMs
     ? new Date(lastFetchMs).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -43,19 +34,7 @@ export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, inte
           <Activity className="h-4 w-4 text-secondary" />
           <h3 className="text-sm font-medium text-foreground">实时行情</h3>
         </div>
-        <button
-          onClick={() => onToggle(!enabled)}
-          disabled={toggling}
-          className={`relative inline-flex h-4 w-7 items-center rounded-full shrink-0 transition-colors duration-200 ${
-            enabled
-              ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]'
-              : 'bg-elevated'
-          } ${toggling ? 'opacity-50' : 'cursor-pointer'}`}
-        >
-          <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-            enabled ? 'translate-x-[14px]' : 'translate-x-0.5'
-          }`} />
-        </button>
+        <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">自动</span>
       </div>
 
       {loading ? (

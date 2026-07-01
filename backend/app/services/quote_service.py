@@ -27,6 +27,7 @@ import logging
 import threading
 import time
 from datetime import date, datetime, time as dt_time
+from pathlib import Path
 
 import polars as pl
 
@@ -70,6 +71,7 @@ class QuoteService:
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
+        self._quotes_cache: pl.DataFrame | None = None
         self._index_quotes_cache: pl.DataFrame | None = None
 
     # ================================================================
@@ -126,19 +128,14 @@ class QuoteService:
         logger.info("行情服务已关闭")
 
     def boot_check(self) -> None:
-        """启动时检查 preferences，若 enabled 则自动启动。
+        """启动时只要实时能力可用就自动启动。
 
-        none 档无实时行情权限:即使 preferences 标记为 enabled,
-        也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
+        OpenTDX 是内置实时数据源，不再暴露“关闭实时”的运行模式。
         """
-        from app.services import preferences
         if not self.is_realtime_allowed():
-            if preferences.get_realtime_quotes_enabled():
-                self._save_enabled(False)
             logger.info("实时行情未启动:当前档位(none)无实时行情权限")
             return
-        if preferences.get_realtime_quotes_enabled():
-            self.start()
+        self.start()
 
     def set_repo(self, repo) -> None:
         """注入 KlineRepository, 用于实时落盘。"""
@@ -244,11 +241,14 @@ class QuoteService:
         """
         df, _ = self.get_enriched_today()
         if df.is_empty():
+            with self._lock:
+                df = self._quotes_cache.clone() if self._quotes_cache is not None else pl.DataFrame()
+        if df.is_empty():
             return df
 
         # 只取盘中选股需要的行情基础列
         keep = [c for c in [
-            "symbol", "close", "open", "high", "low", "volume", "amount",
+            "symbol", "name", "close", "open", "high", "low", "volume", "amount",
             "prev_close", "change_pct", "change_amount", "amplitude", "turnover_rate",
         ] if c in df.columns]
         df = df.select(keep)
@@ -300,10 +300,7 @@ class QuoteService:
     def _poll_loop(self) -> None:
         while self._running and self._enabled:
             try:
-                if self._is_trading_hours():
-                    self._fetch_quotes()
-                else:
-                    logger.debug("非交易时段, 跳过行情轮询")
+                self._fetch_quotes()
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
@@ -373,7 +370,7 @@ class QuoteService:
             if change_amount is None and last_price is not None and prev_close is not None:
                 change_amount = float(last_price) - float(prev_close)
             if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
+                change_pct = float(change_amount) / float(prev_close)
             records.append({
                 "symbol": q.get("symbol"),
                 "name": q.get("name") or ext.get("name"),
@@ -410,6 +407,7 @@ class QuoteService:
             self._symbol_count = len(stock_records)
             self._index_symbol_count = len(index_records)
             self._etf_symbol_count = len(etf_records)
+            self._quotes_cache = self._build_quotes_cache(stock_records, self._repo)
             self._index_quotes_cache = self._build_index_quotes(index_records)
 
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
@@ -482,7 +480,7 @@ class QuoteService:
             if change_amount is None and last_price is not None and prev_close is not None:
                 change_amount = float(last_price) - float(prev_close)
             if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
+                change_pct = float(change_amount) / float(prev_close)
             records.append({
                 "symbol": q.get("symbol"),
                 "name": q.get("name") or ext.get("name"),
@@ -510,6 +508,7 @@ class QuoteService:
             self._symbol_count = len(records)
             self._index_symbol_count = 0
             self._etf_symbol_count = 0
+            self._quotes_cache = self._build_quotes_cache(records, self._repo)
             self._index_quotes_cache = None
 
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
@@ -584,6 +583,145 @@ class QuoteService:
         return df.select(keep)
 
     @staticmethod
+    def _build_quotes_cache(records: list[dict], repo=None) -> pl.DataFrame:
+        """构建原始实时行情缓存。
+
+        enriched 增量计算在没有历史 parquet 时可能无法产出指标缓存；看板仍可
+        直接基于 OpenTDX 的原始报价展示广度、成交额和涨跌榜，避免首屏全 0。
+        """
+        if not records:
+            return pl.DataFrame()
+        df = pl.DataFrame(records)
+        keep = [c for c in [
+            "symbol", "name", "last_price", "close", "prev_close", "open", "high", "low",
+            "volume", "amount", "change_pct", "change_amount", "amplitude", "turnover_rate",
+        ] if c in df.columns]
+        if not keep or "symbol" not in keep:
+            return pl.DataFrame()
+        df = df.select(keep)
+        if "last_price" in df.columns and "close" not in df.columns:
+            df = df.with_columns(pl.col("last_price").alias("close"))
+        if repo is not None and "name" in df.columns:
+            try:
+                inst = repo.get_instruments()
+                if not inst.is_empty() and "symbol" in inst.columns and "name" in inst.columns:
+                    names = inst.select(["symbol", "name"]).unique("symbol")
+                    df = df.join(names, on="symbol", how="left", suffix="_inst").with_columns(
+                        pl.coalesce([pl.col("name"), pl.col("name_inst")]).alias("name")
+                    ).drop("name_inst")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("实时行情名称补全失败: %s", e)
+        return df
+
+    @staticmethod
+    def _read_recent_daily_partitions(daily_dir: Path, cutoff: date) -> pl.DataFrame:
+        """Read recent daily parquet files while normalizing mixed date schemas.
+
+        Historical files can have `date` stored as Utf8 while live OpenTDX writes
+        `date` as a physical Date column. A single `scan_parquet` fails on that
+        schema mismatch, so realtime enriched fallback reads the small recent
+        window file-by-file and casts `date` explicitly.
+        """
+        if not daily_dir.exists():
+            return pl.DataFrame()
+
+        frames: list[pl.DataFrame] = []
+        for part_dir in sorted(daily_dir.glob("date=*")):
+            if not part_dir.is_dir():
+                continue
+            raw_ds = part_dir.name.split("=", 1)[-1]
+            try:
+                partition_date = date.fromisoformat(raw_ds)
+            except ValueError:
+                continue
+            if partition_date < cutoff:
+                continue
+            for parquet in sorted(part_dir.glob("*.parquet")):
+                try:
+                    df = pl.read_parquet(parquet)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("日K分区读取跳过 %s: %s", parquet, e)
+                    continue
+                if df.is_empty():
+                    continue
+                if "date" in df.columns:
+                    df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+                    df = df.with_columns(
+                        pl.when(pl.col("date").is_null())
+                        .then(pl.lit(partition_date).cast(pl.Date))
+                        .otherwise(pl.col("date"))
+                        .alias("date")
+                    )
+                else:
+                    df = df.with_columns(pl.lit(partition_date).cast(pl.Date).alias("date"))
+                frames.append(df)
+
+        if not frames:
+            return pl.DataFrame()
+        return pl.concat(frames, how="diagonal_relaxed").sort(["symbol", "date"])
+
+    @staticmethod
+    def _merge_quote_extra(df: pl.DataFrame, quote_extra: pl.DataFrame | None) -> pl.DataFrame:
+        """Overlay realtime API fields onto computed enriched rows.
+
+        Full fallback computes indicators from recent OHLCV history, but symbols
+        that only have today's OpenTDX quote lack previous bars. OpenTDX already
+        provides prev_close/change/turnover, so keep those realtime fields instead
+        of letting sparse history turn them into nulls.
+        """
+        if df.is_empty() or quote_extra is None or quote_extra.is_empty():
+            return df
+
+        extra_cols = [
+            c for c in ["prev_close", "change_pct", "change_amount", "amplitude", "turnover_rate"]
+            if c in quote_extra.columns
+        ]
+        if not extra_cols or "symbol" not in quote_extra.columns:
+            return df
+
+        extra = (
+            quote_extra
+            .select(["symbol", *extra_cols])
+            .unique(subset=["symbol"], keep="last")
+            .rename({c: f"{c}_quote" for c in extra_cols})
+        )
+        merged = df.join(extra, on="symbol", how="left")
+
+        updates = []
+        for col in extra_cols:
+            quote_col = f"{col}_quote"
+            if quote_col not in merged.columns:
+                continue
+            if col in merged.columns:
+                updates.append(pl.coalesce([pl.col(quote_col), pl.col(col)]).alias(col))
+            else:
+                updates.append(pl.col(quote_col).alias(col))
+        if updates:
+            merged = merged.with_columns(updates)
+        return merged.drop([f"{c}_quote" for c in extra_cols if f"{c}_quote" in merged.columns])
+
+    @staticmethod
+    def _attach_instrument_names(df: pl.DataFrame, repo=None) -> pl.DataFrame:
+        """Attach instrument names to live caches for overview/top lists."""
+        if df.is_empty() or repo is None or "symbol" not in df.columns:
+            return df
+        try:
+            inst = repo.get_instruments()
+            if inst.is_empty() or "symbol" not in inst.columns or "name" not in inst.columns:
+                return df
+            names = inst.select(["symbol", "name"]).unique(subset=["symbol"], keep="last")
+            if "name" in df.columns:
+                return (
+                    df.join(names, on="symbol", how="left", suffix="_inst")
+                    .with_columns(pl.coalesce([pl.col("name"), pl.col("name_inst")]).alias("name"))
+                    .drop("name_inst")
+                )
+            return df.join(names, on="symbol", how="left")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("实时行情名称补全失败: %s", e)
+            return df
+
+    @staticmethod
     def _build_index_quotes(records: list[dict]) -> pl.DataFrame:
         """构建指数实时行情缓存，不落股票 parquet。
 
@@ -604,7 +742,11 @@ class QuoteService:
         # change_pct / amplitude: 小数 → 百分比 (统一指数展示口径)
         for col in ("change_pct", "amplitude"):
             if col in df.columns:
-                df = df.with_columns((pl.col(col).cast(pl.Float64) * 100).alias(col))
+                max_abs = df.select(pl.col(col).cast(pl.Float64, strict=False).abs().max()).item()
+                if max_abs is not None and max_abs <= 1:
+                    df = df.with_columns((pl.col(col).cast(pl.Float64) * 100).alias(col))
+                else:
+                    df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False).alias(col))
         if "last_price" in df.columns and "close" not in df.columns:
             df = df.with_columns(pl.col("last_price").alias("close"))
         return df
@@ -936,14 +1078,8 @@ class QuoteService:
 
                 cutoff = today - timedelta(days=90)
                 table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
-                daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
-                hist_df = (
-                    pl.scan_parquet(daily_glob)
-                    .filter(pl.col("date") >= cutoff)
-                    .sort(["symbol", "date"])
-                    .collect()
-                )
+                hist_df = self._read_recent_daily_partitions(self._repo.store.data_dir / table, cutoff)
                 if hist_df.is_empty():
                     return
 
@@ -965,9 +1101,12 @@ class QuoteService:
 
                 enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
                 enriched_today = enriched_full.filter(pl.col("date") == today)
+                enriched_today = self._merge_quote_extra(enriched_today, quote_extra)
 
             if enriched_today.is_empty():
                 return
+            if asset_type == "stock":
+                enriched_today = self._attach_instrument_names(enriched_today, self._repo)
 
             # ---- 写盘 + 更新缓存 ----
             if merge:

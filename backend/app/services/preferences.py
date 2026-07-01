@@ -40,7 +40,9 @@ def save(updates: dict) -> dict:
 
 
 def get_realtime_quotes_enabled() -> bool:
-    return load().get("realtime_quotes_enabled", False)
+    # OpenTDX is the built-in realtime data source. Keep the quote poller on by
+    # default and ignore older saved false values from the former opt-in switch.
+    return True
 
 
 def get_indices_nav_pinned() -> bool:

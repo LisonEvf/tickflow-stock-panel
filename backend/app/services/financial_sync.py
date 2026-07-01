@@ -1,7 +1,6 @@
 """财务数据独立同步服务。
 
-解耦于 K-line 管道, 自有调度 + 自有存储。
-能力门控: Cap.FINANCIAL (Expert 套餐)
+解耦于 K-line 管道, 自有调度 + 自有存储。当前使用 OpenTDX F10 财报快照。
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ from typing import Any
 
 import polars as pl
 
-from app.tickflow.capabilities import Cap, CapabilitySet
+from app.tickflow.capabilities import CapabilitySet
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +49,6 @@ def _sync_table(
     latest_only: bool = True,
 ) -> int:
     """同步单张财务表。返回写入的行数。"""
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_%s skipped: no FINANCIAL capability", table)
-        return 0
     if not symbols:
         logger.warning("sync_%s skipped: no symbols", table)
         return 0
@@ -135,10 +131,6 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
     """同步所有财务表。返回 {table: rows}。"""
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_all financials skipped: no FINANCIAL capability")
-        return {}
-
     symbols = _get_symbols(data_dir)
     results: dict[str, int] = {}
     for table in FINANCIAL_TABLES:
@@ -188,7 +180,7 @@ def get_financial_df(data_dir: Path, table: str) -> pl.DataFrame:
 # ================================================================
 
 class FinancialScheduler:
-    """独立调度器: 每周同步 metrics, 每季度同步三张报表。"""
+    """独立调度器: 手动同步 OpenTDX 财务快照。"""
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -207,9 +199,6 @@ class FinancialScheduler:
             供 /api/financials/sync/* 手动同步使用, 不启动自动调度。
         auto_schedule=True: 额外启动每周一次的 metrics 自动同步 (启动后 60s 首跑)。
         """
-        if not capset.has(Cap.FINANCIAL):
-            logger.info("FinancialScheduler skipped: no FINANCIAL capability")
-            return
         self._data_dir = data_dir
         self._capset = capset
         # 从持久化恢复上次同步时间: 重启后前端仍能显示真实最后同步时间,而非"尚未同步"
@@ -326,7 +315,7 @@ class FinancialScheduler:
         用 _is_syncing 标志防并发:若已有同步在进行,本次直接跳过,
         避免重复请求拖慢服务端 / 触发上游限流。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
+        if not self._capset:
             return {}
         with self._lock:
             if self._is_syncing:
@@ -344,15 +333,15 @@ class FinancialScheduler:
 
         在后台线程执行同步体,HTTP 请求无需等待。
         返回 {"started": True/False}:
-          - False = 能力不足或已有同步在进行(被防并发跳过)
+          - False = 调度器未初始化或已有同步在进行(被防并发跳过)
           - True  = 已在后台开始,前端应轮询 /status.syncing 观察进度
 
         ⚠ _is_syncing 在此处置 True(持锁),确保 trigger 返回时前端轮询
         /status 已能看到 syncing=True,无竞态窗口;同时防止快速重复点击
         启动多个后台线程。后台线程复用 _run_body 执行真正的同步逻辑。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
-            return {"started": False, "reason": "no FINANCIAL capability"}
+        if not self._data_dir or not self._capset:
+            return {"started": False, "reason": "financial scheduler not initialized"}
         with self._lock:
             if self._is_syncing:
                 logger.info("financial sync trigger skipped: already running")

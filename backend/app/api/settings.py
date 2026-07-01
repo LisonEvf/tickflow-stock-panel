@@ -40,10 +40,12 @@ def get_settings() -> dict:
     from app.services import preferences
     from app.services.ai_provider import ai_configured, current_ai_model, current_codex_command
 
-    key = secrets_store.get_tickflow_key()
+    key = secrets_store.load().get("open_tdx_api_key") or secrets_store.get_tickflow_key()
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
     return {
         "mode": tf_client.current_mode(),
+        "open_tdx_api_key_masked": secrets_store.mask(key),
+        "has_open_tdx_key": bool(key),
         "tickflow_api_key_masked": secrets_store.mask(key),
         "has_tickflow_key": bool(key),
         "tier_label": tier_label(),
@@ -192,6 +194,42 @@ def clear_tickflow_key(request: Request) -> dict:
     return {
         "ok": True,
         "mode": "none",
+        "tier_label": tier_label(),
+        "current_endpoint": tf_client.current_endpoint(),
+        "capabilities_count": len(capset.all()),
+    }
+
+
+@router.post("/open-tdx-key")
+def save_open_tdx_key(req: TickflowKeyIn, request: Request) -> dict:
+    """OpenTDX 兼容入口。
+
+    OpenTDX 当前走本地通达信行情服务器，不需要 API Key。保留这个接口是为了
+    兼容已迁移到 OpenTDX 命名的前端设置页。
+    """
+    capset = detect_capabilities(force=True)
+    request.app.state.capabilities = capset
+    key = req.api_key.strip()
+    if key:
+        secrets_store.save({"open_tdx_api_key": key})
+    return {
+        "ok": True,
+        "open_tdx_api_key_masked": secrets_store.mask(key),
+        "mode": tf_client.current_mode(),
+        "tier_label": tier_label(),
+        "current_endpoint": tf_client.current_endpoint(),
+        "capabilities_count": len(capset.all()),
+    }
+
+
+@router.delete("/open-tdx-key")
+def clear_open_tdx_key(request: Request) -> dict:
+    secrets_store.clear("open_tdx_api_key")
+    capset = detect_capabilities(force=True)
+    request.app.state.capabilities = capset
+    return {
+        "ok": True,
+        "mode": tf_client.current_mode(),
         "tier_label": tier_label(),
         "current_endpoint": tf_client.current_endpoint(),
         "capabilities_count": len(capset.all()),
@@ -432,33 +470,24 @@ class RealtimeQuoteScopePrefs(BaseModel):
 
 @router.put("/preferences/realtime-quotes")
 def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
-    """保存全局实时行情开关。
+    """实时行情保持开启。
 
-    none 档无实时行情权限；free 档开启自选股实时；starter+ 开启全市场实时。
-    前端据此把开关置灰 / 回弹。
+    OpenTDX 是内置实时数据源，不再提供关闭实时轮询的运行模式。保留
+    端点仅用于兼容旧前端调用。
     """
     from app.services import preferences
     qs = getattr(request.app.state, "quote_service", None)
 
     allowed = qs.is_realtime_allowed() if qs else True
-    if req.realtime_quotes_enabled and not allowed:
-        # 当前档位不允许开启实时行情 — 强制关闭
+    if not allowed:
         preferences.save({"realtime_quotes_enabled": False})
-        if qs:
-            qs.disable()
         return {"realtime_quotes_enabled": False, "realtime_allowed": False}
-    if req.realtime_quotes_enabled and qs and qs.realtime_mode() == "watchlist" and not preferences.get_realtime_watchlist_symbols():
-        preferences.save({"realtime_quotes_enabled": False})
-        return {"realtime_quotes_enabled": False, "realtime_allowed": True, "mode": "watchlist", "error": "watchlist_empty"}
 
-    preferences.save({"realtime_quotes_enabled": req.realtime_quotes_enabled})
+    preferences.save({"realtime_quotes_enabled": True})
     if qs:
-        if req.realtime_quotes_enabled:
-            qs.enable()
-        else:
-            qs.disable()
+        qs.enable()
 
-    return {"realtime_quotes_enabled": req.realtime_quotes_enabled, "realtime_allowed": allowed}
+    return {"realtime_quotes_enabled": True, "realtime_allowed": True}
 
 
 @router.put("/preferences/realtime-quote-scope")
@@ -1044,4 +1073,3 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
                 pass  # job 本就不存在(从未开过), 无需处理
 
     return sched
-

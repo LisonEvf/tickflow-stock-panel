@@ -47,7 +47,19 @@ def _load_kline(repo, symbol: str) -> pl.DataFrame:
     start = end - timedelta(days=_KLINE_WINDOW * 2)  # 多取一些保证交易日够
     df = repo.get_daily(symbol, start, end)
     if df.is_empty():
-        return df
+        try:
+            from app.indicators.pipeline import compute_enriched
+            from app.services import kline_sync
+
+            raw = kline_sync.sync_daily_batch([symbol], count=_KLINE_WINDOW + 30)
+            if raw.is_empty():
+                return raw
+            df = compute_enriched(raw, factors=pl.DataFrame())
+            if "date" in df.columns:
+                df = df.sort("date")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("实时日K回退失败 %s: %s", symbol, e)
+            return df
     return df.tail(_KLINE_WINDOW)
 
 

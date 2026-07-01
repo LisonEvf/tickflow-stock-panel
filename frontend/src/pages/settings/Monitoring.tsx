@@ -16,7 +16,7 @@ import {
   useQuoteInterval,
   useCapabilities,
 } from '@/lib/useSharedQueries'
-import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
+import { useUpdateQuoteInterval } from '@/lib/useSharedMutations'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
@@ -46,11 +46,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const { data: quoteStatus } = useQuoteStatus()
   const { data: intervalData } = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
-  const toggleQuote = useToggleRealtimeQuotes()
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
   const isFreeTier = tier === 0
-  const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
@@ -93,12 +91,6 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
       // 忽略 — Toast 已在 request 层处理
     }
   }, [qc])
-
-  const handleToggleQuote = useCallback(async (enabled: boolean) => {
-    await toggleQuote.mutateAsync(enabled)
-    qc.invalidateQueries({ queryKey: QK.preferences })
-    qc.invalidateQueries({ queryKey: QK.quoteStatus })
-  }, [toggleQuote, qc])
 
   const toggleSidebarIndex = useCallback((symbol: string, visible: boolean) => {
     const selected = new Set(sidebarIndexSymbols)
@@ -190,16 +182,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
+          当前数据能力不足，实时监控暂不可用。历史日K与看板数据仍会通过内置数据通道获取。
         </p>
-        <a
-          href="/settings?tab=account"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
-                     hover:bg-accent/90 transition-colors"
-        >
-          配置 API Key 升级
-        </a>
       </div>
     )
   }
@@ -210,12 +194,16 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
       <div className="space-y-6">
         {/* 行情状态 — 开关 + 间隔 */}
         <Card icon={Activity} title="行情轮询">
-          <ToggleRow
-            label="实时行情"
-            desc={isRunning && isTrading ? '运行中' : isRunning ? '运行中 (非交易时段)' : '已关闭'}
-            checked={realtimeEnabled}
-            onChange={handleToggleQuote}
-          />
+          <div className="flex items-center justify-between gap-4 py-1">
+            <div className="min-w-0">
+              <div className="text-sm text-foreground">实时行情</div>
+              <div className="text-[11px] text-muted">
+                {isRunning ? 'OpenTDX 自动轮询中' : '服务启动中'}
+                {!isTrading ? ' · 当前休市' : ''}
+              </div>
+            </div>
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">自动</span>
+          </div>
 
           <div className="mt-3 pt-3 border-t border-border">
             <div className="flex items-center justify-between gap-4 py-1">

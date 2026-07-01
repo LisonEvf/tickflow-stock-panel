@@ -1,35 +1,29 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { AnimatePresence } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
   Crown,
   Layers3,
   RefreshCw,
   Search,
-  Settings2,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { AnalysisConfigDialog, DimensionHeatmap, PresetFetchState, type AnalysisFieldConfig } from '@/components/analysis-shared'
+import { DimensionHeatmap } from '@/components/analysis-shared'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { api, type MarketSnapshotRow } from '@/lib/api'
+import { api, type ExtDataConfig, type MarketSnapshotRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 
-const KEYWORDS = ['industry', '行业', 'sector', '申万', '中信']
 const CANDIDATE_FIELDS = ['industry', '行业', 'sector', '申万', '中信', '行业名称', 'industry_name', 'sector_name']
-const PAGE_LIMIT = 12000
 const MAX_RENDERED_INDUSTRIES = 120
 const MAX_RENDERED_STOCKS = 160
 
 type SortMode = 'heat' | 'avgPct' | 'leader' | 'amount' | 'down'
-type IndustryLevel = 1 | 2 | 3
 
 interface EnrichedStock extends MarketSnapshotRow {
   leaderScore: number
@@ -61,29 +55,6 @@ interface IndustryStat {
   leader: EnrichedStock | null
   heatScore: number
   riskScore: number
-}
-
-// ===== 配置持久化 =====
-
-function loadConfig(): AnalysisFieldConfig {
-  return storage.industryAnalysisConfig.get({}) as AnalysisFieldConfig
-}
-function saveConfig(c: AnalysisFieldConfig) {
-  storage.industryAnalysisConfig.set(c)
-}
-
-// ===== 自动选取最佳数据源 =====
-
-function pickBestConfig(
-  configs: { id: string; label: string; description?: string; fields: { name: string; label: string }[] }[],
-): string {
-  let best = '', bestScore = 0
-  for (const c of configs) {
-    const haystack = [c.id, c.label, c.description ?? '', ...c.fields.flatMap(f => [f.name, f.label])].join(' ').toLowerCase()
-    const score = KEYWORDS.reduce((n, k) => n + (haystack.includes(k) ? 1 : 0), 0)
-    if (score > bestScore) { bestScore = score; best = c.id }
-  }
-  return best
 }
 
 // ===== 工具函数 =====
@@ -237,88 +208,44 @@ function statSort(mode: SortMode) {
   }
 }
 
-// ===== 行业层级分组 =====
-
-function industryLevelName(key: string, level: IndustryLevel) {
-  const parts = key.split('-').map(s => s.trim()).filter(Boolean)
-  return parts[level - 1] || parts[parts.length - 1] || key
-}
-
-function groupByIndustryLevel(groups: DimensionGroup[], level: IndustryLevel): DimensionGroup[] {
-  const map = new Map<string, DimensionGroup>()
-  for (const group of groups) {
-    const key = industryLevelName(group.key, level)
-    const existing = map.get(key)
-    if (existing) {
-      existing.stocks.push(...group.stocks)
-      existing.count = existing.stocks.length
-    } else {
-      map.set(key, {
-        key,
-        count: group.stocks.length,
-        stocks: [...group.stocks],
-        metrics: { ...group.metrics },
-      })
-    }
-  }
-  return [...map.values()].sort((a, b) => b.count - a.count)
-}
-
 // ===== 主页面 =====
 
 export function IndustryAnalysis() {
-  const [fieldConfig, setFieldConfig] = useState<AnalysisFieldConfig>(loadConfig)
-  const [showConfig, setShowConfig] = useState(false)
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<SortMode>('heat')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
 
-  const configsQuery = useQuery({ queryKey: QK.extData, queryFn: api.extDataList })
-  const availableConfigs = configsQuery.data?.items ?? []
-  // 用户配置的 configId 可能已失效 (扩展数据被删除), 此时回退到自动选择,
-  // 避免用失效 ID 请求接口报错; 用户仍可点配置按钮重新选择。
-  const preferredConfigId = fieldConfig.configId || pickBestConfig(availableConfigs)
-  const preferredConfig = availableConfigs.find(c => c.id === preferredConfigId)
-  const activeConfigId = preferredConfig ? preferredConfigId : pickBestConfig(availableConfigs)
-  const activeConfig = availableConfigs.find(c => c.id === activeConfigId)
-
-  const rowsQuery = useQuery({
-    queryKey: QK.extDataRows(activeConfigId, undefined, PAGE_LIMIT),
-    queryFn: () => api.extDataRows(activeConfigId, { limit: PAGE_LIMIT }),
-    enabled: !!activeConfigId,
+  const openkplQuery = useQuery({
+    queryKey: QK.openkplPlateAnalysis('industry'),
+    queryFn: () => api.openkplPlateAnalysis('industry'),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   })
 
-  // 内置行业预设 (ext_hy_ths) 手动获取数据
-  const PRESET_INDUSTRY_ID = 'ext_hy_ths'
-  const queryClient = useQueryClient()
-  const fetchMutation = useMutation({
-    mutationFn: () => api.extDataPresetFetch(PRESET_INDUSTRY_ID),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.extData })
-      queryClient.invalidateQueries({ queryKey: QK.extDataRows(PRESET_INDUSTRY_ID, undefined, PAGE_LIMIT) })
-    },
-  })
-  // 是否处于「内置行业预设存在但无数据」状态 → 显示获取按钮
-  const needsIndustryFetch =
-    !!activeConfig && activeConfig.id === PRESET_INDUSTRY_ID &&
-    !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
+  const activeConfig = useMemo<ExtDataConfig | null>(() => {
+    const data = openkplQuery.data
+    if (!data) return null
+    return {
+      id: data.id,
+      label: data.label,
+      mode: data.mode,
+      fields: data.fields,
+      description: 'openkpl',
+      created_at: '',
+      updated_at: '',
+      latest_sync_date: data.as_of,
+    }
+  }, [openkplQuery.data])
 
-  const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
-    staleTime: 60_000,
-  })
-
-  const marketMap = useMemo(() => buildMarketMap(marketQuery.data?.rows ?? []), [marketQuery.data?.rows])
+  const marketMap = useMemo(() => buildMarketMap((openkplQuery.data?.rows ?? []) as MarketSnapshotRow[]), [openkplQuery.data?.rows])
   const resolved = useMemo(
-    () => resolveDimension(rowsQuery.data, activeConfig, fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
-    [rowsQuery.data, activeConfig, fieldConfig.dimensionField],
+    () => resolveDimension(openkplQuery.data, activeConfig, CANDIDATE_FIELDS),
+    [openkplQuery.data, activeConfig],
   )
 
-  const industryLevel = fieldConfig.hierarchyLevel ?? 2
-  const groups = useMemo(() => groupByIndustryLevel(resolved.groups, industryLevel), [resolved.groups, industryLevel])
+  const groups = resolved.groups
 
   const stats = useMemo(() => {
     return groups
@@ -364,63 +291,24 @@ export function IndustryAnalysis() {
     return map
   }, [marketMap])
 
-  const handleSaveConfig = (c: AnalysisFieldConfig) => {
-    setFieldConfig(c)
-    saveConfig(c)
-    setSelectedKey(null)
-  }
-
-  if (configsQuery.isLoading) {
+  if (openkplQuery.isLoading) {
     return <div className="flex h-full items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted" /></div>
   }
-
-  if (!activeConfig) {
-    // 极端情况: 无任何行业配置。仍提供一键获取内置行业数据入口
-    return (
-      <>
-        <div className="flex h-full flex-col">
-          <PageHeader
-            title="行业分析"
-            right={
-              <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
-                <Settings2 className="h-4 w-4" />
-              </button>
-            }
-          />
-          <PresetFetchState
-            title="暂无行业数据"
-            hint="从同花顺获取行业分类数据后即可使用行业分析"
-            isLoading={fetchMutation.isPending}
-            error={fetchMutation.error}
-            onFetch={() => fetchMutation.mutate()}
-          />
-        </div>
-        <AnimatePresence>
-          {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} showHierarchyLevel />}
-        </AnimatePresence>
-      </>
-    )
-  }
-
-  const industryLevelLabel = `${industryLevel}级行业`
 
   return (
     <>
       <PageHeader
         title="行业分析"
-        subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
+        subtitle={`${openkplQuery.data?.as_of ?? openkplQuery.data?.date ?? '最新'} · openkpl · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">
             <button
-              onClick={() => { rowsQuery.refetch(); marketQuery.refetch() }}
-              disabled={rowsQuery.isFetching || marketQuery.isFetching}
+              onClick={() => { openkplQuery.refetch() }}
+              disabled={openkplQuery.isFetching}
               className="p-1.5 text-muted hover:bg-surface disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={cn('h-4 w-4', (rowsQuery.isFetching || marketQuery.isFetching) && 'animate-spin')} />
-            </button>
-            <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
-              <Settings2 className="h-4 w-4" />
+              <RefreshCw className={cn('h-4 w-4', openkplQuery.isFetching && 'animate-spin')} />
             </button>
           </div>
         }
@@ -462,25 +350,13 @@ export function IndustryAnalysis() {
               />
               <IndustryFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
-          ) : rowsQuery.isLoading ? (
+          ) : openkplQuery.isLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
-          ) : needsIndustryFetch ? (
-            <PresetFetchState
-              title="未获取行业数据"
-              hint="内置行业数据源已就绪,点击下方按钮从同花顺获取行业分类数据"
-              isLoading={fetchMutation.isPending}
-              error={fetchMutation.error}
-              onFetch={() => fetchMutation.mutate()}
-            />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={resolved.hint || '请检查扩展数据是否包含行业/板块相关字段'} />
+            <EmptyState icon={Layers3} title="openkpl 暂无行业数据" hint={resolved.hint || 'openkpl 暂未返回可展示的行业成分股'} />
           )}
         </div>
       </div>
-
-      <AnimatePresence>
-        {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} showHierarchyLevel />}
-      </AnimatePresence>
 
       {previewSymbol && (
         <StockPreviewDialog

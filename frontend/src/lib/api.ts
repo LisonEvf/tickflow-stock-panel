@@ -274,6 +274,9 @@ export interface OverviewDimensionRankItem {
   up_count: number
   down_count: number
   amount: number
+  source?: 'openkpl' | string
+  plate_id?: string | null
+  metric_label?: string | null
   leader?: {
     symbol?: string | null
     name?: string | null
@@ -477,6 +480,7 @@ export interface LimitLadderTier {
 
 export interface LimitLadderResult {
   as_of: string
+  source?: string
   tiers: LimitLadderTier[]
   /** 双方向涨跌停计数(修正后, 不论当前 direction) */
   counts?: { up: number; down: number }
@@ -492,6 +496,27 @@ export interface LimitLadderResult {
   sealed_counts_up?: { real: number; fake: number; pending: number }
   /** 跌停侧 sealed 明细 */
   sealed_counts_down?: { real: number; fake: number; pending: number }
+}
+
+export interface OpenKplPlateItem {
+  plate_id: string
+  name: string
+  strength?: number | null
+  change_pct?: number | null
+  amount?: number | null
+  net_amount?: number | null
+  volume_ratio?: number | null
+  float_market_cap?: number | null
+  stock_count?: number
+  source?: string
+}
+
+export interface OpenKplPlateAnalysis extends ExtDataRowsResult {
+  as_of: string | null
+  source: 'openkpl' | string
+  kind: 'concept' | 'industry'
+  rank_total: number
+  plates: OpenKplPlateItem[]
 }
 
 // ===== Backtest =====
@@ -623,9 +648,9 @@ export interface EndpointManifest {
 }
 
 export interface SettingsState {
-  mode: 'none' | 'free' | 'api_key'
-  tickflow_api_key_masked: string
-  has_tickflow_key: boolean
+  mode: 'none' | 'free' | 'api_key' | 'opentdx'
+  open_tdx_api_key_masked: string
+  has_open_tdx_key: boolean
   tier_label: string
   current_endpoint: string
   probe_log: string[]
@@ -644,16 +669,16 @@ export interface SettingsState {
   ai_user_agent: string
 }
 
-/** 保存 TickFlow Key 的响应(先探后存) */
-export interface SaveTickflowKeyResult {
+/** 保存 OpenTDX Key 的响应(先探后存) */
+export interface SaveOpenTdxKeyResult {
   ok: boolean
   /** ok=false 且 key 无效时的原因标识,前端据此提示「Key 无效」 */
   reason?: 'invalid'
   error?: string
-  mode?: 'none' | 'free' | 'api_key'
+  mode?: 'none' | 'free' | 'api_key' | 'opentdx'
   tier_label?: string
   current_endpoint?: string
-  tickflow_api_key_masked?: string
+  open_tdx_api_key_masked?: string
   capabilities_count?: number
 }
 
@@ -736,13 +761,13 @@ export const api = {
     }),
 
   settings: () => request<SettingsState>('/api/settings'),
-  saveTickflowKey: (api_key: string) =>
-    request<SaveTickflowKeyResult>('/api/settings/tickflow-key', {
+  saveOpenTdxKey: (api_key: string) =>
+    request<SaveOpenTdxKeyResult>('/api/settings/open-tdx-key', {
       method: 'POST',
       body: JSON.stringify({ api_key }),
     }),
-  clearTickflowKey: () =>
-    request<any>('/api/settings/tickflow-key', { method: 'DELETE' }),
+  clearOpenTdxKey: () =>
+    request<any>('/api/settings/open-tdx-key', { method: 'DELETE' }),
 
   /** 标记首次使用向导完成（持久化到后端 preferences） */
   completeOnboarding: () =>
@@ -1087,6 +1112,19 @@ export const api = {
   marketSnapshot: () =>
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
+
+  openkplPlateAnalysis: (kind: 'concept' | 'industry') =>
+    request<OpenKplPlateAnalysis>(`/api/openkpl/plates/${kind}`),
+
+  openkplLimitLadder: (asOf?: string, direction?: 'up' | 'down') => {
+    const params = new URLSearchParams()
+    if (asOf) params.set('as_of', asOf)
+    if (direction === 'down') params.set('direction', 'down')
+    const qs = params.toString()
+    return request<LimitLadderResult>(
+      `/api/openkpl/limit-ladder${qs ? `?${qs}` : ''}`,
+    )
+  },
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()
