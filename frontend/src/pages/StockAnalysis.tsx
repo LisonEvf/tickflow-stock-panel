@@ -187,7 +187,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
 
   const rows = kline.data?.rows ?? []
   if (rows.length === 0) {
-    return <EmptyState icon={LineChart} title="暂无日 K 数据" hint="该标的尚未同步日 K,请先在数据页或自选页同步。" />
+    return <EmptyState icon={LineChart} title="暂无日 K 数据" hint="OpenTDX 暂未返回该标的历史K线,可稍后刷新或换一只标的查看。" />
   }
 
   const levels = (levelsQ.data?.levels ?? {}) as Record<LevelType, PriceLevel[]>

@@ -213,6 +213,9 @@ export function StockDailyKChart({
       {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
+      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) === 0 && (
+        <div className="flex h-40 items-center justify-center text-sm text-muted">暂无历史K线数据</div>
+      )}
       {rows.length > 0 && (
         <EChartsCandlestick
           data={rows}

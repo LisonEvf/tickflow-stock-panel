@@ -7,8 +7,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.services import kline_sync
+from app.services.kline_history import load_daily_history
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +104,6 @@ def get_daily(
     - ext_columns: 可选，动态 LEFT JOIN 扩展数据表，结果平铺到 stock_info.ext 下
       (key 为 "{config_id}__{field_name}")，供日K信息条等场景展示自定义字段
     """
-    import polars as pl
-
     repo = request.app.state.repo
     end = date.fromisoformat(end_date) if end_date else date.today()
     if start_date:
@@ -116,38 +114,18 @@ def get_daily(
     stock_info = _get_stock_info(repo, symbol)
     stock_name = stock_info.get("name")
 
-    # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号)
-    df = repo.get_daily(symbol, start, end)
-
+    # 从 enriched 表读取；若本地覆盖不足（例如只有今日实时蜡烛），从 OpenTDX 即时补历史。
+    capset = getattr(request.app.state, "capabilities", None)
+    df, source = load_daily_history(repo, symbol, start, end, capset=capset)
     if df.is_empty():
-        try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
-        if raw.is_empty():
-            return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
-        # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
-        factors = pl.DataFrame()
-        capset = getattr(request.app.state, "capabilities", None)
-        try:
-            from app.tickflow.capabilities import Cap
-            if capset and capset.has(Cap.ADJ_FACTOR):
-                factors = kline_sync.fetch_adj_factor_single(symbol)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors)
-        rows = enriched.tail(days).to_dicts()
-        # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows)
-        resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
-        return _attach_ext(resp, repo, symbol, ext_columns)
+        return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": [], "source": source}
 
     rows = df.to_dicts()
 
     # 追加/覆盖今日实时蜡烛
     rows = _maybe_inject_live_candle(request, symbol, rows)
 
-    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": source}
     return _attach_ext(resp, repo, symbol, ext_columns)
 
 
