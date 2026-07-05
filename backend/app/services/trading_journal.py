@@ -380,10 +380,28 @@ def portfolio_context_for_symbol(
     portfolio = build_portfolio(data_dir, price_map=price_map)
     position = next((p for p in portfolio["positions"] if p["symbol"] == normalized_symbol), None)
     summary = portfolio["summary"]
+    positions = [
+        {
+            "symbol": p.get("symbol"),
+            "name": p.get("name") or "",
+            "quantity": p.get("quantity"),
+            "avg_cost": p.get("avg_cost"),
+            "latest_price": p.get("latest_price"),
+            "market_value": p.get("market_value"),
+            "unrealized_pnl": p.get("unrealized_pnl"),
+            "unrealized_pnl_pct": p.get("unrealized_pnl_pct"),
+            "realized_pnl": p.get("realized_pnl"),
+            "weight": p.get("weight"),
+        }
+        for p in sorted(portfolio["positions"], key=lambda r: float(r.get("weight") or 0), reverse=True)
+    ]
     return {
         "symbol": normalized_symbol,
         "held": bool(position),
         "position": position,
+        "has_positions": bool(positions),
+        "position_count": len(positions),
+        "positions": positions,
         "account": {
             "cash": summary["cash"],
             "market_value": summary["market_value"],

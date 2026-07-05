@@ -315,7 +315,7 @@ def get_minute(
     """读取某只股票某天的分钟 K 线。
 
     - 本地有完整数据(240条) → 直接返回
-    - 本地无数据或不完整 → 从 TickFlow 实时拉取返回（不写入）
+    - 本地无数据或不完整 → 从 OpenTDX 实时拉取返回（不写入）
     """
     repo = request.app.state.repo
     stock_info = _get_stock_info(repo, symbol)
@@ -324,7 +324,7 @@ def get_minute(
     if trade_date is None:
         trade_date = repo.latest_minute_date(symbol)
     if trade_date is None:
-        # 本地无任何分钟K，尝试从 TickFlow 拉取当天
+        # 本地无任何分钟K，尝试从 OpenTDX 拉取当天
         trade_date = date.today()
         df = kline_sync.fetch_minute_single(symbol, trade_date)
         return {
@@ -360,7 +360,7 @@ def get_minute(
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
         }
 
-    # 本地不完整或无数据 → 从 TickFlow 实时拉取
+    # 本地不完整或无数据 → 从 OpenTDX 实时拉取
     live_df = kline_sync.fetch_minute_single(symbol, trade_date)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,

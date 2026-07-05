@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, openkpl, overview, pipeline, screener, settings as settings_api, signals, stock_analysis, strategy, trading, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, llm_server, market_recap, monitor_rules, alerts, openkpl, overview, pipeline, screener, settings as settings_api, signals, stock_analysis, strategy, trading, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "TickFlow Stock Panel v%s starting (mode=%s)",
+        "OpenTDX Stock Panel v%s starting (mode=%s)",
         __version__, tf_client.current_mode(),
     )
 
@@ -181,9 +181,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="TickFlow Stock Panel",
+    title="OpenTDX Stock Panel",
     version=__version__,
-    description="A 股选股 + 回测面板 — TickFlow 适配",
+    description="A 股选股 + 回测面板 — OpenTDX 适配",
     lifespan=lifespan,
 )
 
@@ -268,6 +268,7 @@ app.include_router(trading.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
+app.include_router(llm_server.router)
 
 
 # 能力门控异常 → 403(而非默认 500)

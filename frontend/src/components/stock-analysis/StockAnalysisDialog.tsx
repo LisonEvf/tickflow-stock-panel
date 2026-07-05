@@ -5,6 +5,7 @@ import {
   Settings2, Send, Wand2, Minimize2, History, LineChart,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import type { StockAnalysisPortfolioMeta } from '@/lib/api'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import {
   type ActiveTask, type HistoryReport,
@@ -35,7 +36,27 @@ function getContent(task: ActiveTask | HistoryReport | null): string {
 function getMeta(task: ActiveTask | HistoryReport | null) {
   if (!task) return null
   if ('meta' in task) return task.meta
-  return { summary: task.summary, close: task.close, levels: task.levels }
+  return { summary: task.summary, close: task.close, levels: task.levels, portfolio: task.portfolio }
+}
+
+function fmtNumber(value: number | null | undefined, digits = 2) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '--'
+}
+
+function fmtPct(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '--'
+}
+
+function portfolioLabel(portfolio?: StockAnalysisPortfolioMeta) {
+  if (!portfolio) return ''
+  const position = portfolio.position
+  if (portfolio.held && position) {
+    return `持仓 ${position.quantity ?? '--'} 股 · 成本 ${fmtNumber(position.avg_cost)} · 仓位 ${fmtPct(position.weight)}`
+  }
+  if (portfolio.has_positions) {
+    return `未持本股 · 总仓位 ${fmtPct(portfolio.account?.position_ratio)}`
+  }
+  return '当前空仓'
 }
 
 export function StockAnalysisDialog({ task, mode, minimized }: Props) {
@@ -46,6 +67,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const phase = getPhase(task)
   const content = getContent(task)
   const meta = getMeta(task)
+  const portfolioText = portfolioLabel(meta?.portfolio)
   const isHistory = mode === 'history'
   const isWorking = phase === 'loading' || phase === 'streaming'
   const open = !!task && !minimized
@@ -117,6 +139,11 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   {phase === 'streaming' && (
                     <span className="flex items-center gap-1 text-sky-300 shrink-0">
                       <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />生成中
+                    </span>
+                  )}
+                  {portfolioText && (
+                    <span className="max-w-[240px] truncate rounded bg-sky-500/10 px-1.5 py-px text-sky-300 shrink-0">
+                      {portfolioText}
                     </span>
                   )}
                   {isHistory && task && 'created_at' in task && (

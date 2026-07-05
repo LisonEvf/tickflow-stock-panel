@@ -207,6 +207,7 @@ class SaveReportRequest(BaseModel):
     summary: str = ""
     close: float | None = None
     levels: dict | None = None
+    portfolio: dict | None = None
 
 
 @router.get("/reports")
@@ -226,6 +227,7 @@ def save_report(request: Request, req: SaveReportRequest):
         "summary": req.summary,
         "close": req.close,
         "levels": req.levels,
+        "portfolio": req.portfolio,
     })
     return {"ok": True, "report": report}
 

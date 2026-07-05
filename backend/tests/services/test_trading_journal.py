@@ -88,9 +88,21 @@ def test_portfolio_context_for_symbol_marks_current_holding(tmp_path):
         "quantity": 100,
         "fee": 0,
     })
+    trading_journal.add_trade(tmp_path, {
+        "symbol": "600000.SH",
+        "side": "buy",
+        "trade_time": "2026-06-02T10:00:00",
+        "price": 8,
+        "quantity": 200,
+        "fee": 0,
+    })
 
     context = trading_journal.portfolio_context_for_symbol(tmp_path, "000001.SZ", latest_price=12)
 
     assert context["held"] is True
     assert context["position"]["quantity"] == 100
     assert context["position"]["unrealized_pnl"] == 200
+    assert context["has_positions"] is True
+    assert context["position_count"] == 2
+    assert {p["symbol"] for p in context["positions"]} == {"000001.SZ", "600000.SH"}
+    assert context["account"]["market_value"] == 2800

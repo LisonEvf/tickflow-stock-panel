@@ -299,6 +299,20 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
                     value = parts[level - 1] if level <= len(parts) else parts[-1]
                 groups.setdefault(value, {})[symbol] = quote
 
+    def _member(stock: dict) -> dict:
+        return {
+            "symbol": stock.get("symbol"),
+            "name": stock.get("name"),
+            "close": _finite(stock.get("close")),
+            "change_pct": _finite(stock.get("change_pct")),
+            "amount": _finite(stock.get("amount")),
+            "turnover_rate": _finite(stock.get("turnover_rate")),
+            "vol_ratio_5d": _finite(stock.get("vol_ratio_5d")),
+            "market_cap": _finite(stock.get("market_cap")),
+            "float_market_cap": _finite(stock.get("float_market_cap")),
+            "consecutive_limit_ups": stock.get("consecutive_limit_ups"),
+        }
+
     items = []
     for name, by_symbol in groups.items():
         stocks = list(by_symbol.values())
@@ -307,6 +321,7 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
         if not changes:
             continue
         leader = max(stocks, key=lambda s: _finite(s.get("change_pct")) or -999)
+        members = sorted(stocks, key=lambda s: _finite(s.get("change_pct")) or -999, reverse=True)[:160]
         items.append({
             "name": name,
             "count": len(stocks),
@@ -319,6 +334,7 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
                 "name": leader.get("name"),
                 "change_pct": _finite(leader.get("change_pct")),
             },
+            "members": [_member(stock) for stock in members],
         })
 
     leading = sorted(items, key=lambda x: x["avg_pct"], reverse=True)[:limit]

@@ -3,7 +3,7 @@
 集中管理全市场行情拉取 + enriched 缓存，供盘中选股、自选股等所有模块复用。
 
 架构:
-  - 后台线程轮询 TickFlow get_by_universes(["CN_Equity_A", "CN_Index"])
+  - 后台线程轮询 OpenTDX get_by_universes(["CN_Equity_A", "CN_Index"])
   - 拉取行情 → 写 kline_daily (不复权) + 增量计算 enriched → 写盘 + 更新缓存
   - _enriched_cache 是唯一的盘中数据源 (OHLCV + 全套技术指标)
   - _live_agg_cache 是递推状态 (只加载一次, 盘中不变)
@@ -291,7 +291,7 @@ class QuoteService:
         return df
 
     def get_index_quotes(self, symbols: list[str] | None = None) -> pl.DataFrame:
-        """返回实时指数行情缓存。不会触发 TickFlow 请求。"""
+        """返回实时指数行情缓存。不会触发 OpenTDX 请求。"""
         with self._lock:
             df = self._index_quotes_cache.clone() if self._index_quotes_cache is not None else pl.DataFrame()
         if df.is_empty():
@@ -918,7 +918,7 @@ class QuoteService:
                 symbol = ev.get("symbol") or ""
                 name = ev.get("name") or ""
                 message = ev.get("message") or ""
-                title = f"TickFlow · {source_label}"
+                title = f"OpenTDX · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 if webhook_adapter.send_feishu(url, title, body, secret):
                     pushed += 1
@@ -960,7 +960,7 @@ class QuoteService:
                 else:
                     body = message or name
 
-                title = f"TickFlow · {source_label}"
+                title = f"OpenTDX · {source_label}"
                 notify_adapter.notify(title, body)
         except Exception as e:  # noqa: BLE001
             logger.debug("系统通知发送异常 (不影响告警主流程): %s", e)

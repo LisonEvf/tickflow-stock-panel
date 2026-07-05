@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { api, type PriceLevel, type LevelType } from './api'
+import { api, type PriceLevel, type LevelType, type StockAnalysisPortfolioMeta } from './api'
 
 /**
  * AI 个股分析 —— 全局任务/报告 store(与 aiReportStore 解耦、并行存在)。
@@ -26,6 +26,7 @@ export interface ActiveTask {
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
+    portfolio?: StockAnalysisPortfolioMeta
   } | null
   createdAt: number
   savedReportId?: string
@@ -42,6 +43,7 @@ export interface HistoryReport {
   summary?: string
   close?: number | null
   levels?: Record<LevelType, PriceLevel[]>
+  portfolio?: StockAnalysisPortfolioMeta
   created_at: string
 }
 
@@ -195,7 +197,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
       if (!cur) return
       switch (chunk.type) {
         case 'meta':
-          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close } })
+          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close, portfolio: chunk.portfolio } })
           break
         case 'delta':
           if (firstDelta) { patchTask(id, { phase: 'streaming' }); firstDelta = false }
@@ -221,6 +223,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
           symbol: final.symbol, name: final.name, focus: final.focus,
           content: final.content, summary: final.meta?.summary ?? '',
           close: final.meta?.close ?? null, levels: final.meta?.levels,
+          portfolio: final.meta?.portfolio,
         })
         if (res.report) {
           patchTask(id, { savedReportId: res.report.id })

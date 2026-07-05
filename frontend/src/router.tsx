@@ -13,13 +13,13 @@ import { Dashboard } from './pages/Dashboard'
 import { AnalysisDetail } from './pages/AnalysisDetail'
 import { ConceptAnalysis } from './pages/ConceptAnalysis'
 import { IndustryAnalysis } from './pages/IndustryAnalysis'
-import { StockAnalysis } from './pages/StockAnalysis'
 import { Review } from './pages/Review'
 import { LimitUpLadder } from './pages/LimitUpLadder'
 import { Branding } from './pages/Branding'
 import { Settings } from './pages/Settings'
 import { Indices } from './pages/Indices'
 import { Dev } from './pages/Dev'
+import { LLMService } from './pages/LLMService'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
 
@@ -68,12 +68,13 @@ export const router = createBrowserRouter([
       { path: 'analysis/:menuId', element: <AnalysisDetail /> },
       { path: 'concept-analysis', element: <ConceptAnalysis /> },
       { path: 'industry-analysis', element: <IndustryAnalysis /> },
-      { path: 'stock-analysis', element: <StockAnalysis /> },
+      { path: 'stock-analysis', element: <Navigate to="/" replace /> },
       { path: 'review', element: <Review /> },
       { path: 'watchlist', element: <Watchlist /> },
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },
       { path: 'financials', element: <Financials /> },
+      { path: 'llm-service', element: <LLMService /> },
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },

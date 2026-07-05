@@ -32,7 +32,7 @@ def _user_data_root() -> Path:
       - 用户体验: 用户选了安装目录, 自然期望「程序和数据都在这」, 单一总目录更直观。
       - 数据安全: Inno Setup 覆盖安装(升级)时只往 {app} 写新程序文件, 不会清空
         目录里不在安装清单上的运行时文件 (data/ 即此类), 故覆盖安装不丢数据。
-        (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/tickflow.iss 的 [UninstallDelete]。)
+        (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/opentdx.iss 的 [UninstallDelete]。)
     旧版本数据迁移: 见 DataStore._migrate_legacy_data_dir(), 老用户首次启动自动搬迁。
     """
     # 打包桌面版: exe 同级的 data/ 子目录 (与程序同一总目录, 覆盖安装不丢数据)
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
  
     # AI
     ai_provider: str = "openai_compat"
-    ai_base_url: str = "https://api.alysc.top"
+    ai_base_url: str = "http://127.0.0.1:18080/v1"
     ai_api_key: str = ""
     ai_model: str = "gpt-5.5"
     ai_codex_command: str = "codex"
@@ -86,6 +86,7 @@ class Settings(BaseSettings):
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     )
+    llm_server_base_url: str = "http://127.0.0.1:18080"
 
     # Server
     host: str = "0.0.0.0"

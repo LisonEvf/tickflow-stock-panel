@@ -10,7 +10,7 @@
 
 构建 (在项目根目录):
   cd frontend && pnpm build                     # 先构建前端到 frontend/dist
-  pyinstaller packaging/tickflow.spec           # 产物在 dist/TickFlowStockPanel/
+  pyinstaller packaging/opentdx.spec            # 产物在 dist/OpenTDXStockPanel/
 """
 import sys
 from pathlib import Path
@@ -28,13 +28,23 @@ block_cipher = None
 
 # ── 资源路径基准: 项目根 (spec 文件在 packaging/ 下) ──────────────────
 ROOT = Path(SPECPATH).parent
+OPENTDX_SRC = ROOT / "backend" / "opentdx"
+OPENKPH_SRC = ROOT / "backend" / "openkph" / "src"
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
+OPENKPH_PACKAGE_SRC = str(OPENKPH_SRC / "openkph")
 # 图标按平台选: Windows 用 .ico, macOS 用 .icns (PyInstaller 对 .ico 在
 # mac 上静默忽略, 不换格式 Dock/Finder 会显示通用图标)。两者都由
 # packaging/generate_icon.py 一并生成。
 APP_ICON = str(ROOT / "packaging" / ("icon.icns" if _IS_MACOS else "icon.ico"))
+
+# 本仓库 vendored 的本地包。uv 的 editable install 在开发环境可用, 但
+# frozen app 不能依赖 .pth/finder 文件, 必须在 Analysis 前显式加入路径。
+for local_src in (OPENTDX_SRC, OPENKPH_SRC):
+    local_src_str = str(local_src)
+    if local_src_str not in sys.path:
+        sys.path.insert(0, local_src_str)
 
 # ── 收集带原生库的依赖 (.libs/ 目录必须完整, 否则启动崩) ─────────────
 # polars / pyarrow / duckdb / fastexcel 都自带共享库子目录
@@ -68,6 +78,13 @@ hiddenimports += collect_submodules("polars")
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
 
+# ── 本地数据源包 (editable/vendored 源码, frozen 后需显式收集) ─────────
+hiddenimports += collect_submodules("opentdx")
+hiddenimports += collect_submodules("google.protobuf")
+hiddenimports += ["socks"]
+datas += collect_data_files("opentdx")
+datas += collect_data_files("google.protobuf")
+
 # ── 系统通知后端 (winotify/plyer 按平台动态导入) ─────────────────────
 if sys.platform == "win32":
     hiddenimports += collect_submodules("winotify")
@@ -92,7 +109,7 @@ hiddenimports += [
 
 # ── fastapi / pydantic 元数据 (版本检测用) ───────────────────────────
 # 注意: 任何用 importlib.metadata.version() 读版本的包, 都必须 copy_metadata,
-# 否则 frozen 后报 PackageNotFoundError。tickflow 包内部就是这么读的。
+# 否则 frozen 后报 PackageNotFoundError。
 # 用容错写法: 不存在的包跳过, 避免不同环境 (有无装某依赖) 导致构建失败。
 def _safe_metadata(pkg):
     """收集包元数据, 包不存在时静默跳过。"""
@@ -103,7 +120,7 @@ def _safe_metadata(pkg):
 
 for pkg in (
     "fastapi", "pydantic", "pydantic_settings", "starlette", "anyio",
-    "tickflow",  # tickflow/__version__.py 用 importlib.metadata 读版本
+    "opentdx",
     "uvicorn", "polars", "duckdb", "pyarrow", "httpx", "numpy", "pandas",
     "openai", "platformdirs", "winotify", "plyer", "apscheduler",
     "python-dotenv", "fastexcel",
@@ -117,6 +134,9 @@ datas += [(FRONTEND_DIST, "static")]
 datas += [(TIERS_YAML, ".")]
 # 内置策略 → app/strategy/builtin/ (importlib 动态加载, 不能进 PYZ)
 datas += [(BUILTIN_STRATEGIES, "app/strategy/builtin")]
+# OpenKPH 源码和资源 → openkph/src/openkph/。openkph_service.py 在
+# frozen 模式下会按 _MEIPASS/openkph/src 动态加入 sys.path。
+datas += [(OPENKPH_PACKAGE_SRC, "openkph/src/openkph")]
 
 # ── 排除不需要的重型依赖 (主包不含 vectorbt 回测链) ──────────────────
 excludes = [
@@ -138,7 +158,7 @@ excludes = [
 
 a = Analysis(
     [str(ROOT / "backend" / "app" / "desktop.py")],
-    pathex=[str(ROOT / "backend")],
+    pathex=[str(ROOT / "backend"), str(OPENTDX_SRC), str(OPENKPH_SRC)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -159,7 +179,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="TickFlowStockPanel",
+    name="OpenTDXStockPanel",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -181,7 +201,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="TickFlowStockPanel",
+    name="OpenTDXStockPanel",
 )
 
 # ── macOS: 封装成 .app 包 ────────────────────────────────────────────
@@ -202,13 +222,13 @@ if _IS_MACOS:
 
     app = BUNDLE(
         coll,
-        name="TickFlowStockPanel.app",
+        name="OpenTDXStockPanel.app",
         icon=APP_ICON,
-        bundle_identifier="com.tickflow.stockpanel",
+        bundle_identifier="com.opentdx.stockpanel",
         version=APP_VERSION,   # → CFBundleShortVersionString / CFBundleVersion
         info_plist={
-            "CFBundleName": "TickFlow Stock Panel",
-            "CFBundleDisplayName": "TickFlow 股票面板",
+            "CFBundleName": "OpenTDX Stock Panel",
+            "CFBundleDisplayName": "OpenTDX 股票面板",
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "10.13",

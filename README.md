@@ -9,9 +9,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-≥3.11-blue.svg)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
-[![Data: TickFlow](https://img.shields.io/badge/Data-TickFlow-00b386.svg)](https://tickflow.org/auth/register?ref=V3KDKGXPEA)
+[![Data: OpenTDX](https://img.shields.io/badge/Data-OpenTDX-00b386.svg)](https://github.com/LisonEvf/opentdx)
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
-[![GitHub stars](https://img.shields.io/github/stars/shy3130/tickflow-stock-panel?style=social)](https://github.com/shy3130/tickflow-stock-panel/stargazers)
+[![Project: opentdx-stock-panel](https://img.shields.io/badge/Project-opentdx--stock--panel-111827.svg)](.)
 
 </div>
 
@@ -30,9 +30,9 @@
 
 
 
- 基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
+ 基于 [OpenTDX](https://github.com/LisonEvf/opentdx) 数据源。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
 
-> ⚠️ 考虑到tickflow数据源没有人气/资金流向等个性化数据,我将开放自有的第三方数据以供大佬们研究使用,包括但不限于当前内置的ths概念/ths行业(后续更新在这里)
+> ⚠️ 考虑到 OpenTDX 数据源没有人气/资金流向等个性化数据,我将开放自有的第三方数据以供大佬们研究使用,包括但不限于当前内置的ths概念/ths行业(后续更新在这里)
 
  
 > 有更多稳定免费数据源推荐,或者提交建议/意见的大佬可以邮件到 415333856@qq.com
@@ -217,7 +217,7 @@ git pull
 
 ### 🧰 数据与扩展
 
-- **TickFlow 多源数据**:日 K / 分钟 K / 指数 / 财务 / 实时行情
+- **OpenTDX 多源数据**:日 K / 分钟 K / 指数 / 财务 / 实时行情
 - **🔌 第三方接入(重点)**:Tushare 等 HTTP 定时拉取 · CSV / Excel 上传 · JSON 写入,自动 schema 发现 + 符号归一,页面可视化配置,**可与自有量化项目数据并入 DuckDB 同台分析**
 - **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控
 - **令牌桶限流**:适配各档位 rpm / batch,批量合并 + 增量拉取
@@ -228,7 +228,7 @@ git pull
 
 所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页修改。
 
-### 数据源:TickFlow
+### 数据源:OpenTDX
 
 ```ini
 TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key = 按订阅档位解锁
@@ -287,7 +287,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | **后端**     | FastAPI · Pydantic v2 · APScheduler · sse-starlette                                               |
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
-| **数据源**   | [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方 SDK 、其他数据源后续迭代实装   |
+| **数据源**   | [OpenTDX](https://github.com/LisonEvf/opentdx) 官方 SDK 、其他数据源后续迭代实装   |
 | **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)                                                      |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
 | **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
@@ -317,11 +317,11 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 ## ⚠️ 免责声明
 
-本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 TickFlow 官方为准。
+本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 OpenTDX 官方为准。
 
 ## 📄 License
 
-[MIT](./LICENSE) © tickflow-stock-panel contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
+[MIT](./LICENSE) © opentdx-stock-panel contributors · 本项目依赖 [OpenTDX](https://github.com/LisonEvf/opentdx) 提供数据服务,使用前请遵守其服务条款。
 
 ## 社区
 

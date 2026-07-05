@@ -10,6 +10,7 @@ import tempfile
 import tomllib
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app import secrets_store
 from app.config import settings
@@ -23,6 +24,15 @@ CODEX_SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
 Message = dict[str, str]
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_OPENAI_RETRYABLE_MARKERS = (
+    "temporarily unavailable",
+    "service unavailable",
+    "upstream_error",
+    "error code: 502",
+    "error code: 503",
+    "rate limit",
+    "overloaded",
+)
 
 
 def current_ai_provider() -> str:
@@ -33,6 +43,33 @@ def current_ai_model() -> str:
     if current_ai_provider() == CODEX_CLI_PROVIDER:
         return normalize_codex_model(str(secrets_store.load().get("ai_model") or ""))
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
+
+
+def current_ai_base_url() -> str:
+    return secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)
+
+
+def is_official_llm_provider() -> bool:
+    """Return true when the OpenAI-compatible endpoint is the bundled official LLM route."""
+    if current_ai_provider() != OPENAI_COMPAT_PROVIDER:
+        return False
+    configured = _normalize_base_url(current_ai_base_url())
+    official = _normalize_base_url(settings.llm_server_base_url)
+    return bool(configured and official and configured == official)
+
+
+def _normalize_base_url(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+    scheme = (parsed.scheme or "http").lower()
+    host = (parsed.hostname or "").lower()
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3].rstrip("/")
+    return f"{scheme}://{host}{port}{path}"
 
 
 def current_codex_command() -> str:
@@ -113,13 +150,27 @@ async def stream_ai_text(
         yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return
 
-    async for chunk in _stream_openai(
-        messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-    ):
-        yield chunk
+    yielded = False
+    try:
+        async for chunk in _stream_openai(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        ):
+            yielded = True
+            yield chunk
+    except Exception:
+        if yielded:
+            raise
+        text = await _run_openai_once(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        if text:
+            yield text
 
 
 async def _run_openai_once(
@@ -134,12 +185,24 @@ async def _run_openai_once(
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
     client = _openai_client(ai_key, timeout)
-    resp = await client.chat.completions.create(
-        model=current_ai_model(),
-        messages=list(messages),
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    last_exc: Exception | None = None
+    for attempt in range(5):
+        try:
+            resp = await client.chat.completions.create(
+                model=current_ai_model(),
+                messages=list(messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= 4 or not _is_retryable_openai_error(exc):
+                raise
+            await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
+    else:
+        raise last_exc or RuntimeError("AI request failed")
+
     if not resp.choices:
         return ""
     return (resp.choices[0].message.content or "").strip()
@@ -177,11 +240,16 @@ def _openai_client(api_key: str, timeout: float):
     user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
     return AsyncOpenAI(
         api_key=api_key,
-        base_url=secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
+        base_url=current_ai_base_url(),
         timeout=timeout,
         max_retries=2,
         default_headers={"User-Agent": user_agent},
     )
+
+
+def _is_retryable_openai_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _OPENAI_RETRYABLE_MARKERS)
 
 
 async def _run_codex_cli(
@@ -252,7 +320,7 @@ async def _run_codex_cli(
 
 def _codex_prompt(messages: Sequence[Message], *, max_tokens: int) -> str:
     parts = [
-        "You are TickFlow Stock Panel's local AI provider.",
+        "You are OpenTDX Stock Panel's local AI provider.",
         "This is a text-generation task. The working directory is intentionally empty.",
         "Use only the user-provided prompt content below; do not inspect or modify local files.",
         "Return only the final requested content; do not include execution logs.",

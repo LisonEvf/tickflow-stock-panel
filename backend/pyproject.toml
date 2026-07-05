@@ -1,7 +1,7 @@
 [project]
-name = "tickflow-stock-panel-backend"
+name = "opentdx-stock-panel-backend"
 version = "0.1.67"
-description = "A 股选股 + 监控 + 回测面板 — TickFlow 适配"
+description = "A 股选股 + 监控 + 回测面板 — OpenTDX 适配"
 readme = "../README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

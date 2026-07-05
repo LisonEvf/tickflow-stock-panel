@@ -24,13 +24,35 @@ const CODEX_MODEL_OPTIONS = [
   { label: 'gpt-5', value: 'gpt-5', hint: '通用模型' },
 ]
 
-const PRESETS: { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; partner?: boolean; promo?: string }[] = [
+type AiPreset = {
+  label: string
+  provider?: string
+  url: string
+  model: string
+  codexCommand?: string
+  website: string
+  websiteLabel: string
+  description: string
+  partner?: boolean
+  promo?: string
+}
+
+const DEFAULT_AI_PRESET: AiPreset = {
+  label: '官方 LLM 服务',
+  url: 'http://127.0.0.1:18080/v1',
+  model: 'gpt-5.5',
+  website: '/llm-service',
+  websiteLabel: 'LLM 服务',
+  description: '连接本机 Sub2API 用户中心，支持注册、充值、余额、API Key 和用量管理。',
+}
+
+const PRESETS: AiPreset[] = [
+  DEFAULT_AI_PRESET,
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
   { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。' },
   { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: '', codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
-  { label: '炸鸡中转站', url: 'https://code.alysc.top/v1', model: 'gpt-5.5', website: 'https://code.alysc.top/sign-up?aff=1afk', websiteLabel: 'code.alysc.top', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.01倍率' },
 ]
 
 export function SettingsAIPanel() {
@@ -39,9 +61,9 @@ export function SettingsAIPanel() {
   const s = settings.data
 
   const [provider, setProvider] = useState(OPENAI_PROVIDER)
-  const [baseUrl, setBaseUrl] = useState('')
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_AI_PRESET.url)
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('')
+  const [model, setModel] = useState(DEFAULT_AI_PRESET.model)
   const [codexCustomModel, setCodexCustomModel] = useState(false)
   const [codexCommand, setCodexCommand] = useState(CODEX_COMMAND)
   const [customUa, setCustomUa] = useState(false)
@@ -61,10 +83,14 @@ export function SettingsAIPanel() {
 
   useEffect(() => {
     if (!s) return
-    setProvider(s.ai_provider ?? OPENAI_PROVIDER)
-    setBaseUrl(s.ai_base_url ?? '')
-    setModel(s.ai_model ?? '')
-    setCodexCustomModel(!!s.ai_model && !CODEX_MODEL_OPTIONS.some(o => o.value === s.ai_model))
+    const nextProvider = s.ai_provider ?? OPENAI_PROVIDER
+    const useDefaultPreset = nextProvider !== CODEX_PROVIDER && !s.ai_configured && !s.has_ai_key && !s.ai_base_url && !s.ai_model
+    const nextBaseUrl = useDefaultPreset ? DEFAULT_AI_PRESET.url : (s.ai_base_url ?? '')
+    const nextModel = useDefaultPreset ? DEFAULT_AI_PRESET.model : (s.ai_model ?? '')
+    setProvider(nextProvider)
+    setBaseUrl(nextBaseUrl)
+    setModel(nextModel)
+    setCodexCustomModel(!!nextModel && !CODEX_MODEL_OPTIONS.some(o => o.value === nextModel))
     setCodexCommand(s.ai_codex_command ?? CODEX_COMMAND)
     const ua = s.ai_user_agent ?? ''
     setCustomUa(!!ua)
@@ -107,17 +133,17 @@ export function SettingsAIPanel() {
     onSuccess: () => {
       setConfirmClear(false)
       setProvider(OPENAI_PROVIDER)
-      setBaseUrl('')
+      setBaseUrl(DEFAULT_AI_PRESET.url)
       setApiKey('')
-      setModel('')
+      setModel(DEFAULT_AI_PRESET.model)
       setCodexCustomModel(false)
       setCodexCommand(CODEX_COMMAND)
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
         ai_provider: OPENAI_PROVIDER,
-        ai_base_url: '',
-        ai_model: '',
+        ai_base_url: DEFAULT_AI_PRESET.url,
+        ai_model: DEFAULT_AI_PRESET.model,
         ai_codex_command: CODEX_COMMAND,
         has_ai_key: false,
         ai_configured: false,
@@ -280,7 +306,7 @@ export function SettingsAIPanel() {
             <>
               <div className="grid grid-cols-2 gap-4">
                 <Field label="API 地址">
-                  <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://code.alysc.top" className={INPUT_CLS} />
+                  <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={DEFAULT_AI_PRESET.url} className={INPUT_CLS} />
                 </Field>
                 <Field label="模型">
                   <input type="text" value={model} onChange={e => setModel(e.target.value)} placeholder="gpt-5.5" className={INPUT_CLS} />

@@ -28,7 +28,6 @@ import {
   Loader2,
   LayoutDashboard,
   Tags,
-  TrendingUp,
   Flame,
   BarChart3,
   Sparkles,
@@ -38,6 +37,7 @@ import {
   RadioTower,
   CheckCircle2,
   BookOpenCheck,
+  Bot,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -60,11 +60,11 @@ const nav = [
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/backtest',   label: '回测',   icon: History },
-  { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },
   { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
   { to: '/industry-analysis', label: '行业分析', icon: Landmark },
   { to: '/financials', label: '财务分析', icon: FileText },
+  { to: '/llm-service', label: 'LLM服务', icon: Bot },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
@@ -271,7 +271,7 @@ export function Layout() {
               className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
               style={{ textShadow: `0 0 10px ${BRAND}44` }}
             >
-              <div>TickFlow</div>
+              <div>OpenTDX</div>
               <div>Stock Panel</div>
             </div>
           </div>
@@ -309,8 +309,8 @@ export function Layout() {
                 <>
                   <Icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1">{label}</span>
-                  {/* 个股分析 Beta 标识 */}
-                  {(to === '/stock-analysis' || to === '/review') && (
+                  {/* Beta 标识 */}
+                  {to === '/review' && (
                     <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400 shrink-0">
                       Beta
                     </span>

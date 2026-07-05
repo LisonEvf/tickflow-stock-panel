@@ -711,7 +711,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                     continue
                 secret = preferences.get_feishu_webhook_secret()
                 ok = webhook_adapter.send_feishu_card(
-                    url, "TickFlow · 每日复盘", subtitle, content, secret
+                    url, "OpenTDX · 每日复盘", subtitle, content, secret
                 )
                 logger.info("review push(feishu) %s", "sent" if ok else "failed")
             # 未来更多渠道在此追加分支

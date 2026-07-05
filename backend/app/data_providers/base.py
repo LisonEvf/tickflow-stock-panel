@@ -1,6 +1,6 @@
 """Provider contracts for external market data sources.
 
-The first implementation wraps TickFlow. Other providers (Tushare/AkShare/etc.)
+The first implementation wraps OpenTDX. Other providers (Tushare/AkShare/etc.)
 should return the same normalized Polars schemas so storage, indicators and
 backtests stay data-source agnostic.
 """

@@ -94,7 +94,7 @@ def get_index_daily(
     try:
         raw = kline_sync.sync_daily_batch([symbol], count=days + 150)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
+        raise HTTPException(status_code=502, detail=f"OpenTDX fetch failed: {e}") from e
     if raw.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 

@@ -9,8 +9,8 @@ const BASE = ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData
-  const headers: Record<string, string> = {}
-  if (!isFormData) headers['Content-Type'] = 'application/json'
+  const headers = new Headers(init?.headers)
+  if (!isFormData && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail = ''
@@ -158,7 +158,31 @@ export interface AiStockReport {
   summary?: string
   close?: number | null
   levels?: Record<LevelType, PriceLevel[]>
+  portfolio?: StockAnalysisPortfolioMeta
   created_at: string
+}
+
+export interface StockAnalysisPortfolioMeta {
+  held: boolean
+  has_positions: boolean
+  position_count: number
+  position?: {
+    symbol?: string
+    name?: string
+    quantity?: number
+    avg_cost?: number
+    latest_price?: number | null
+    market_value?: number
+    unrealized_pnl?: number
+    unrealized_pnl_pct?: number | null
+    weight?: number
+  } | null
+  account?: {
+    cash?: number
+    market_value?: number
+    total_assets?: number
+    position_ratio?: number
+  }
 }
 
 // ===== Kline =====
@@ -274,6 +298,7 @@ export interface OverviewDimensionRankItem {
   up_count: number
   down_count: number
   amount: number
+  members?: MarketSnapshotRow[]
   source?: 'openkpl' | string
   plate_id?: string | null
   metric_label?: string | null
@@ -743,6 +768,148 @@ export interface SettingsState {
   ai_user_agent: string
 }
 
+export interface LlmServerConfig {
+  base_url: string
+  gateway_base_url: string
+}
+
+export interface LlmServerHealth {
+  ok: boolean
+  base_url: string
+  status?: number
+  data?: any
+  error?: string
+}
+
+export interface LlmServerUser {
+  id: number
+  username: string
+  email: string
+  role?: 'admin' | 'user'
+  balance: number
+  concurrency?: number
+  status?: string
+  created_at?: string
+  updated_at?: string
+  [key: string]: any
+}
+
+export interface LlmServerAuthResponse {
+  access_token: string
+  refresh_token?: string
+  expires_in?: number
+  token_type?: string
+  user: LlmServerUser
+}
+
+export interface LlmServerApiKey {
+  id: number
+  key: string
+  name: string
+  status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
+  group_id: number | string | null
+  quota: number
+  quota_used: number
+  expires_at: string | null
+  created_at: string
+  last_used_at: string | null
+  [key: string]: any
+}
+
+export type LlmServerGroupId = number | string
+
+export interface LlmServerGroup {
+  id?: LlmServerGroupId
+  group_id?: LlmServerGroupId
+  value?: LlmServerGroupId
+  name?: string
+  label?: string
+  display_name?: string
+  code?: string
+  status?: string
+  enabled?: boolean
+  [key: string]: any
+}
+
+export type LlmServerGroupsResponse =
+  | LlmServerGroup[]
+  | {
+    items?: LlmServerGroup[]
+    groups?: LlmServerGroup[]
+    data?: LlmServerGroup[]
+    default_group_id?: LlmServerGroupId | null
+    default_group?: LlmServerGroupId | null
+    [key: string]: any
+  }
+
+export interface LlmServerPaginated<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface LlmServerUsageStats {
+  total_api_keys?: number
+  active_api_keys?: number
+  total_requests?: number
+  total_tokens?: number
+  total_cost?: number
+  total_actual_cost?: number
+  today_requests?: number
+  today_tokens?: number
+  today_cost?: number
+  today_actual_cost?: number
+  average_duration_ms?: number
+  rpm?: number
+  tpm?: number
+  [key: string]: any
+}
+
+export interface LlmServerCheckoutInfo {
+  methods: Record<string, { min?: number; max?: number; enabled?: boolean; [key: string]: any }>
+  global_min: number
+  global_max: number
+  plans?: any[]
+  balance_disabled?: boolean
+  balance_recharge_multiplier?: number
+  recharge_fee_rate?: number
+  help_text?: string
+  help_image_url?: string
+  [key: string]: any
+}
+
+export interface LlmServerOrder {
+  id: number
+  amount: number
+  pay_amount: number
+  payment_type: string
+  out_trade_no: string
+  status: string
+  order_type: string
+  created_at: string
+  expires_at: string
+  [key: string]: any
+}
+
+export interface LlmServerCreateOrderResult {
+  order_id: number
+  amount: number
+  pay_amount: number
+  pay_url?: string
+  qr_code?: string
+  payment_type?: string
+  payment_mode?: string
+  out_trade_no?: string
+  expires_at: string
+  [key: string]: any
+}
+
+function llmAuthHeaders(token?: string): HeadersInit {
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 /** 保存 OpenTDX Key 的响应(先探后存) */
 export interface SaveOpenTdxKeyResult {
   ok: boolean
@@ -860,6 +1027,96 @@ export const api = {
   /** 一键清空 AI 配置(保留自定义 UA) */
   clearAiSettings: () =>
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
+
+  // ===== LLM Server (Sub2API 用户中心) =====
+  llmServerConfig: () =>
+    request<LlmServerConfig>('/api/llm-server/config'),
+  llmServerSaveConfig: (base_url: string) =>
+    request<LlmServerConfig>('/api/llm-server/config', {
+      method: 'PUT',
+      body: JSON.stringify({ base_url }),
+    }),
+  llmServerHealth: () =>
+    request<LlmServerHealth>('/api/llm-server/health'),
+  llmServerPublicSettings: () =>
+    request<any>('/api/llm-server/settings/public'),
+  llmServerLogin: (email: string, password: string) =>
+    request<LlmServerAuthResponse>('/api/llm-server/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  llmServerRegister: (payload: {
+    email: string
+    password: string
+    verify_code?: string
+    promo_code?: string
+    invitation_code?: string
+    aff_code?: string
+  }) =>
+    request<LlmServerAuthResponse>('/api/llm-server/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  llmServerMe: (token: string) =>
+    request<LlmServerUser>('/api/llm-server/auth/me', { headers: llmAuthHeaders(token) }),
+  llmServerProfile: (token: string) =>
+    request<LlmServerUser>('/api/llm-server/user/profile', { headers: llmAuthHeaders(token) }),
+  llmServerUsageStats: (token: string) =>
+    request<LlmServerUsageStats>('/api/llm-server/usage/dashboard/stats', { headers: llmAuthHeaders(token) }),
+  llmServerKeys: (token: string, page = 1, pageSize = 20) =>
+    request<LlmServerPaginated<LlmServerApiKey>>(
+      `/api/llm-server/keys?page=${page}&page_size=${pageSize}`,
+      { headers: llmAuthHeaders(token) },
+    ),
+  llmServerGroupsAvailable: (token: string) =>
+    request<LlmServerGroupsResponse>('/api/llm-server/groups/available', { headers: llmAuthHeaders(token) }),
+  llmServerCreateKey: (token: string, payload: { name: string; group_id?: LlmServerGroupId | null; quota?: number; expires_in_days?: number }) =>
+    request<LlmServerApiKey>('/api/llm-server/keys', {
+      method: 'POST',
+      headers: llmAuthHeaders(token),
+      body: JSON.stringify(payload),
+    }),
+  llmServerUpdateKey: (token: string, id: number, payload: Partial<LlmServerApiKey>) =>
+    request<LlmServerApiKey>(`/api/llm-server/keys/${id}`, {
+      method: 'PUT',
+      headers: llmAuthHeaders(token),
+      body: JSON.stringify(payload),
+    }),
+  llmServerDeleteKey: (token: string, id: number) =>
+    request<{ message: string }>(`/api/llm-server/keys/${id}`, {
+      method: 'DELETE',
+      headers: llmAuthHeaders(token),
+    }),
+  llmServerCheckoutInfo: (token: string) =>
+    request<LlmServerCheckoutInfo>('/api/llm-server/payment/checkout-info', { headers: llmAuthHeaders(token) }),
+  llmServerCreateOrder: (token: string, payload: {
+    amount: number
+    payment_type: string
+    order_type: 'balance' | 'subscription'
+    plan_id?: number
+    return_url?: string
+  }) =>
+    request<LlmServerCreateOrderResult>('/api/llm-server/payment/orders', {
+      method: 'POST',
+      headers: llmAuthHeaders(token),
+      body: JSON.stringify(payload),
+    }),
+  llmServerOrders: (token: string, page = 1, pageSize = 5) =>
+    request<LlmServerPaginated<LlmServerOrder>>(
+      `/api/llm-server/payment/orders/my?page=${page}&page_size=${pageSize}`,
+      { headers: llmAuthHeaders(token) },
+    ),
+  llmServerVerifyOrder: (token: string, out_trade_no: string) =>
+    request<LlmServerOrder>('/api/llm-server/payment/orders/verify', {
+      method: 'POST',
+      headers: llmAuthHeaders(token),
+      body: JSON.stringify({ out_trade_no }),
+    }),
+  llmServerUseKey: (api_key: string, model: string, base_url?: string) =>
+    request<{ ok: boolean; ai_provider: string; ai_base_url: string; ai_model: string; ai_configured: boolean; ai_api_key_masked: string }>(
+      '/api/llm-server/use',
+      { method: 'POST', body: JSON.stringify({ api_key, model, base_url }) },
+    ),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   updateMinuteSync: (enabled: boolean, days: number) =>
@@ -1574,6 +1831,7 @@ export const api = {
     symbol: string; name?: string; focus?: string; content: string
     summary?: string; close?: number | null
     levels?: Record<LevelType, PriceLevel[]>
+    portfolio?: StockAnalysisPortfolioMeta
   }) =>
     request<{ ok: boolean; report: AiStockReport }>('/api/stock-analysis/reports', {
       method: 'POST', body: JSON.stringify(r),
@@ -1592,6 +1850,7 @@ export const api = {
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
+    portfolio?: StockAnalysisPortfolioMeta
     content?: string
     message?: string
   }> {

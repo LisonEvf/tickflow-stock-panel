@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock } from 'lucide-react'
+import { X, RefreshCw, Clock, Sparkles, Loader2, History } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { toast } from '@/components/Toast'
+import { findTodayReport, openHistoryReport, startAnalysis } from '@/lib/stockAnalysisStore'
 
 interface Props {
   symbol: string | null
@@ -42,6 +44,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [showIntraday, setShowIntraday] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
+  const [checkingAnalysis, setCheckingAnalysis] = useState(false)
+  const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const qc = useQueryClient()
 
   const watchlist = useQuery({
@@ -69,11 +73,39 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     return () => document.removeEventListener('keydown', handler)
   }, [symbol, onClose])
 
+  useEffect(() => {
+    setConfirmReport(null)
+    setCheckingAnalysis(false)
+  }, [symbol])
+
   const handleRefresh = () => {
     if (!symbol) return
     qc.invalidateQueries({ queryKey: ['kline', symbol!] })
     if (showIntraday) {
       qc.invalidateQueries({ queryKey: ['kline-minute', symbol!] })
+    }
+  }
+
+  const runAnalysis = async () => {
+    if (!symbol) return
+    const res = await startAnalysis(symbol, name ?? '')
+    if (res.error) toast(res.error, 'error')
+  }
+
+  const handleAnalyze = async () => {
+    if (!symbol || checkingAnalysis) return
+    setCheckingAnalysis(true)
+    try {
+      const today = await findTodayReport(symbol)
+      if (today) {
+        setConfirmReport({ id: today.id, created_at: today.created_at, focus: today.focus })
+      } else {
+        await runAnalysis()
+      }
+    } catch {
+      await runAnalysis()
+    } finally {
+      setCheckingAnalysis(false)
     }
   }
 
@@ -97,6 +129,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            data-testid="stock-preview-dialog"
             className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
           >
             {/* 顶栏 */}
@@ -170,6 +203,19 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
                 <span className="text-muted/20 mx-0.5">|</span>
 
+                <button
+                  onClick={handleAnalyze}
+                  disabled={checkingAnalysis}
+                  data-testid="stock-preview-ai-analysis"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-sky-400/30 bg-sky-500/10 text-sky-300 transition-colors hover:bg-sky-500/16 disabled:cursor-not-allowed disabled:opacity-45"
+                  title="AI 个股分析"
+                >
+                  {checkingAnalysis ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                  AI分析
+                </button>
+
+                <span className="text-muted/20 mx-0.5">|</span>
+
                 {/* 刷新 */}
                 <button
                   onClick={handleRefresh}
@@ -182,6 +228,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 {/* 关闭 */}
                 <button
                   onClick={onClose}
+                  data-testid="stock-preview-close"
+                  title="关闭"
                   className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
                 >
                   <X className="h-4 w-4" />
@@ -271,9 +319,76 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {confirmReport && (
+              <StockAnalysisConfirmModal
+                report={confirmReport}
+                onView={() => {
+                  openHistoryReport(confirmReport.id)
+                  setConfirmReport(null)
+                }}
+                onRedo={async () => {
+                  setConfirmReport(null)
+                  await runAnalysis()
+                }}
+                onClose={() => setConfirmReport(null)}
+              />
+            )}
           </motion.div>
         </div>
       )}
     </AnimatePresence>
   )
+}
+
+function StockAnalysisConfirmModal({ report, onView, onRedo, onClose }: {
+  report: { id: string; created_at: string; focus: string }
+  onView: () => void
+  onRedo: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="w-full max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mb-2 flex items-center gap-2">
+          <History className="h-4 w-4 text-sky-400" />
+          <span className="text-sm font-medium text-foreground">该个股已有分析报告</span>
+        </div>
+        <p className="mb-1 text-xs leading-relaxed text-secondary">
+          最近一次报告生成于 <span className="text-foreground">{fmtRelative(report.created_at)}</span>。
+        </p>
+        {report.focus && <p className="mb-1 text-xs text-muted">关注点: {report.focus}</p>}
+        <p className="mb-4 text-xs text-muted">可直接查看历史,或重新生成一份新报告。</p>
+        <div className="flex gap-2">
+          <button
+            onClick={onView}
+            className="h-8 flex-1 rounded-lg border border-border bg-elevated text-xs text-secondary transition-colors hover:text-foreground"
+          >
+            查看历史
+          </button>
+          <button
+            onClick={onRedo}
+            className="h-8 flex-1 rounded-lg border border-sky-400/30 bg-sky-500/15 text-xs text-sky-300 transition-colors hover:bg-sky-500/25"
+          >
+            重新分析
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function fmtRelative(iso: string): string {
+  try {
+    const t = new Date(iso).getTime()
+    const diff = Date.now() - t
+    if (diff < 60_000) return '刚刚'
+    if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+    if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`
+    if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)} 天前`
+    return new Date(iso).toLocaleDateString('zh-CN')
+  } catch { return iso }
 }
