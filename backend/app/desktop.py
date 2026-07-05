@@ -20,6 +20,7 @@ import socket
 import sys
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,48 @@ logger = logging.getLogger(__name__)
 _APP_NAME = "OpenTDX 股票面板"
 _BASE_PORT = 3018
 _PORT_PROBE_RANGE = 50  # 从 3018 起最多试 50 个端口
+
+
+def _desktop_log_path() -> Path | None:
+    try:
+        from app.config import settings
+
+        log_dir = settings.data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / "desktop.log"
+    except Exception:
+        return None
+
+
+def _configure_logging() -> None:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    log_path = _desktop_log_path()
+    if log_path is not None:
+        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+
+def _show_fatal_error(message: str) -> None:
+    log_path = _desktop_log_path()
+    if log_path is not None:
+        message = f"{message}\n\n日志文件: {log_path}"
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, _APP_NAME, 0x10)
+            return
+        except Exception:
+            pass
+
+    logger.error(message)
 
 
 def _ensure_data_dir_writable() -> None:
@@ -43,7 +86,7 @@ def _ensure_data_dir_writable() -> None:
         probe = data_root / ".write_probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("数据目录不可写, 桌面版无法运行: %s (%s)", data_root, e)
         raise
 
@@ -62,7 +105,7 @@ def _acquire_single_instance() -> bool:
         try:
             pid_str = lock_path.read_text(encoding="utf-8").strip()
             pid = int(pid_str) if pid_str.isdigit() else None
-        except Exception:  # noqa: BLE001
+        except Exception:
             pid = None
 
         if pid is not None and _pid_alive(pid):
@@ -79,10 +122,8 @@ def _release_single_instance() -> None:
     from app.config import settings
 
     lock_path = settings.data_dir / ".desktop.lock"
-    try:
+    with suppress(Exception):
         lock_path.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _pid_alive(pid: int) -> bool:
@@ -125,10 +166,13 @@ def _find_free_port(start: int, count: int = _PORT_PROBE_RANGE) -> int:
 
 def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
     """后台线程: 启动 uvicorn 服务。ready_event 在线程退出时置位 (通知主线程)。"""
+    logger.info("backend thread: importing uvicorn")
     import uvicorn
 
     # 延迟 import app, 确保配置层已就绪 (frozen 检测在 config.py 导入时完成)
+    logger.info("backend thread: importing FastAPI app")
     from app.main import app
+    logger.info("backend thread: FastAPI app imported")
 
     config = uvicorn.Config(
         app,
@@ -136,6 +180,7 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
         port=port,
         log_level="info",
         access_log=False,    # 桌面版不需要访问日志
+        log_config=None,     # Keep desktop file logging active in frozen builds.
         loop="auto",
     )
     server = uvicorn.Server(config)
@@ -146,7 +191,12 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
     server.config.callback_notify = None  # 不用 notify 机制
 
     try:
+        logger.info("backend thread: starting uvicorn")
         server.run()
+        logger.info("backend thread: uvicorn stopped")
+    except Exception:
+        logger.exception("backend server thread crashed")
+        raise
     finally:
         ready_event.set()
 
@@ -156,8 +206,8 @@ def _wait_for_server(port: int, timeout: float = 60.0) -> bool:
 
     比 monkey-patch uvicorn 内部方法更健壮, 不依赖版本内部实现。
     """
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + timeout
@@ -176,7 +226,7 @@ def _open_window(url: str) -> None:
     """主线程: 用 pywebview 打开桌面窗口。"""
     import webview  # type: ignore[import-not-found]
 
-    window = webview.create_window(
+    webview.create_window(
         _APP_NAME,
         url,
         width=1440,
@@ -191,15 +241,13 @@ def _open_window(url: str) -> None:
 
 def main() -> int:
     """桌面客户端主入口。返回进程退出码。"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    _configure_logging()
 
     try:
         _ensure_data_dir_writable()
-    except Exception:
+    except Exception as e:
         # 数据目录不可写是致命错误, 无法继续
+        _show_fatal_error(f"数据目录不可写, OpenTDX 股票面板无法启动。\n\n{e}")
         return 1
 
     # 单实例: 已运行则退出
@@ -218,10 +266,11 @@ def main() -> int:
         )
         server_thread.start()
 
-        # 轮询 health 接口等后端就绪 (含 lifespan 初始化, 最多 60s)
-        if not _wait_for_server(port, timeout=60.0):
+        # 轮询 health 接口等后端就绪。Frozen first start can spend time loading
+        # native data libraries, so keep the desktop patient before surfacing an error.
+        if not _wait_for_server(port, timeout=180.0):
             logger.error("后端启动超时, 桌面版退出")
-            _release_single_instance()
+            _show_fatal_error("后端服务启动超时, OpenTDX 股票面板无法启动。")
             return 1
 
         url = f"http://127.0.0.1:{port}"
@@ -233,6 +282,10 @@ def main() -> int:
         return 0
     except KeyboardInterrupt:
         return 0
+    except Exception as e:
+        logger.exception("desktop startup failed")
+        _show_fatal_error(f"OpenTDX 股票面板启动失败。\n\n{e}")
+        return 1
     finally:
         _release_single_instance()
 

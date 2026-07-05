@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── 运行环境检测 ──────────────────────────────────────────
@@ -110,10 +110,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
-        """确保 data_dir 是绝对路径（环境变量传入的相对路径基于项目根目录解析）。"""
+        """确保 data_dir 是绝对路径(环境变量传入的相对路径会稳定解析)。"""
         if not self.data_dir.is_absolute():
-            # 相对路径基于项目根目录解析，而非 CWD
-            self.data_dir = (_PROJECT_ROOT / self.data_dir).resolve()
+            # In frozen desktop builds, relative DATA_DIR belongs next to the app,
+            # not inside PyInstaller's temporary resource directory.
+            base_dir = Path(sys.executable).resolve().parent if _IS_FROZEN else _PROJECT_ROOT
+            self.data_dir = (base_dir / self.data_dir).resolve()
         return self
 
  

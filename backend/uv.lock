@@ -1169,6 +1169,84 @@ requires-dist = [
 ]
 
 [[package]]
+name = "opentdx-stock-panel-backend"
+version = "0.1.68"
+source = { editable = "." }
+dependencies = [
+    { name = "apscheduler" },
+    { name = "duckdb" },
+    { name = "fastapi" },
+    { name = "fastexcel" },
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "opentdx" },
+    { name = "pandas" },
+    { name = "platformdirs" },
+    { name = "plyer" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pysocks" },
+    { name = "python-dotenv" },
+    { name = "python-multipart" },
+    { name = "pyyaml" },
+    { name = "sse-starlette" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "winotify", marker = "sys_platform == 'win32'" },
+]
+
+[package.optional-dependencies]
+backtest = [
+    { name = "vectorbt" },
+]
+desktop = [
+    { name = "pywebview" },
+]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+legacy-cpu = [
+    { name = "polars", extra = ["rtcompat"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apscheduler", specifier = ">=3.10" },
+    { name = "duckdb", specifier = ">=1.0" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastexcel", specifier = ">=0.10" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "openai", specifier = ">=1.40" },
+    { name = "opentdx", editable = "opentdx" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "platformdirs", specifier = ">=4.0" },
+    { name = "plyer", specifier = ">=2.1" },
+    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", extras = ["rtcompat"], marker = "extra == 'legacy-cpu'", specifier = ">=1.0" },
+    { name = "pyarrow", specifier = ">=16.0" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.4" },
+    { name = "pysocks", specifier = ">=1.7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "pywebview", marker = "extra == 'desktop'", specifier = ">=5.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "sse-starlette", specifier = ">=2.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "vectorbt", marker = "extra == 'backtest'", specifier = ">=0.26" },
+    { name = "winotify", marker = "sys_platform == 'win32'", specifier = ">=1.1" },
+]
+provides-extras = ["legacy-cpu", "backtest", "desktop", "dev"]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1759,6 +1837,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pysocks"
+version = "1.7.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/bd/11/293dd436aea955d45fc4e8a35b6ae7270f5b8e00b53cf6c024c83b657a11/PySocks-1.7.1.tar.gz", hash = "sha256:3f8804571ebe159c380ac6de37643bb4685970655d3bba243530d6558b799aa0" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/8d/59/b4572118e098ac8e46e399a1dd0f2d85403ce8bbaad9ec79373ed6badaf9/PySocks-1.7.1-py3-none-any.whl", hash = "sha256:2725bd0a9925919b9b51739eea5f9e2bae91e83288108a9ad338b2e3a4435ee5" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.0.3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2227,82 +2314,6 @@ sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b7/4d/08c89e34946fce2a
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb" },
 ]
-
-[[package]]
-name = "opentdx-stock-panel-backend"
-version = "0.1.67"
-source = { editable = "." }
-dependencies = [
-    { name = "apscheduler" },
-    { name = "duckdb" },
-    { name = "fastapi" },
-    { name = "fastexcel" },
-    { name = "httpx" },
-    { name = "openai" },
-    { name = "opentdx" },
-    { name = "pandas" },
-    { name = "platformdirs" },
-    { name = "plyer" },
-    { name = "polars" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "python-multipart" },
-    { name = "pyyaml" },
-    { name = "sse-starlette" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "winotify", marker = "sys_platform == 'win32'" },
-]
-
-[package.optional-dependencies]
-backtest = [
-    { name = "vectorbt" },
-]
-desktop = [
-    { name = "pywebview" },
-]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-legacy-cpu = [
-    { name = "polars", extra = ["rtcompat"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "apscheduler", specifier = ">=3.10" },
-    { name = "duckdb", specifier = ">=1.0" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "fastexcel", specifier = ">=0.10" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "openai", specifier = ">=1.40" },
-    { name = "opentdx", editable = "opentdx" },
-    { name = "pandas", specifier = ">=2.2" },
-    { name = "platformdirs", specifier = ">=4.0" },
-    { name = "plyer", specifier = ">=2.1" },
-    { name = "polars", specifier = ">=1.0" },
-    { name = "polars", extras = ["rtcompat"], marker = "extra == 'legacy-cpu'", specifier = ">=1.0" },
-    { name = "pyarrow", specifier = ">=16.0" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydantic-settings", specifier = ">=2.4" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "python-multipart", specifier = ">=0.0.6" },
-    { name = "pywebview", marker = "extra == 'desktop'", specifier = ">=5.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "sse-starlette", specifier = ">=2.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
-    { name = "vectorbt", marker = "extra == 'backtest'", specifier = ">=0.26" },
-    { name = "winotify", marker = "sys_platform == 'win32'", specifier = ">=1.1" },
-]
-provides-extras = ["legacy-cpu", "backtest", "desktop", "dev"]
 
 [[package]]
 name = "tqdm"
