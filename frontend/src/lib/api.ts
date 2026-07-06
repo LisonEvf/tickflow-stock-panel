@@ -1331,9 +1331,12 @@ export const api = {
       symbol: string
       name?: string
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
+      requested_date?: string | null
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      fallback?: boolean
+      fallback_reason?: string | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
@@ -1916,15 +1919,36 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/market-recap/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
-    })
+    let res: Response
+    try {
+      res = await fetch('/api/market-recap/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+      })
+    } catch {
+      const msg = '后端服务不可用,请确认 FastAPI 已在 http://127.0.0.1:3018 启动'
+      toast(msg, 'error')
+      throw new Error(msg)
+    }
     if (!res.ok) {
       let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
+      let raw = ''
+      try {
+        raw = await res.text()
+        const j = JSON.parse(raw)
+        detail = j.detail ?? j.message ?? ''
+      } catch {
+        detail = raw.trim()
+      }
+      const contentType = res.headers.get('content-type') || ''
+      const proxyLikeFailure =
+        res.status >= 500 &&
+        contentType.includes('text/plain') &&
+        (!detail || detail === 'Internal Server Error')
+      const msg = proxyLikeFailure
+        ? '后端服务不可用或前端代理异常,请确认 http://127.0.0.1:3018/health 可访问'
+        : detail || `${res.status} ${res.statusText}`
       toast(msg, 'error')
       throw new Error(msg)
     }

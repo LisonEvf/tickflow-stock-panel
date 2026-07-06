@@ -402,6 +402,66 @@ def _pct_band_rows(values: list[float]) -> list[dict]:
     return out
 
 
+_OVERVIEW_COLS = [
+    "symbol", "name", "close", "prev_close", "high", "low", "change_pct", "amount", "turnover_rate", "volume",
+    "vol_ratio_5d", "consecutive_limit_ups", "signal_limit_up", "signal_broken_limit_up", "signal_limit_down",
+    "ma5", "ma20", "ma60", "high_60d", "low_60d", "signal_n_day_high", "signal_n_day_low",
+]
+
+
+def _rows_from_enriched_df(df: pl.DataFrame) -> list[dict]:
+    if df.is_empty():
+        return []
+    return df.select([c for c in _OVERVIEW_COLS if c in df.columns]).to_dicts()
+
+
+def _filter_active_rows(rows: list[dict]) -> list[dict]:
+    if not rows or "volume" not in rows[0]:
+        return rows
+    active_rows = [
+        r for r in rows
+        if (_finite(r.get("volume")) or 0) > 0
+        or (_finite(r.get("change_pct")) or 0) != 0
+    ]
+    if active_rows:
+        return active_rows
+    return [r for r in rows if (_finite(r.get("close")) or 0) > 0]
+
+
+def _is_abnormal_full_market_flat(rows: list[dict]) -> bool:
+    if len(rows) < 1000:
+        return False
+    changes = [_finite(r.get("change_pct")) for r in rows]
+    changes = [v for v in changes if v is not None]
+    return bool(changes) and all(abs(v) < 1e-12 for v in changes)
+
+
+def _parse_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _previous_data_date(repo, before: date) -> date | None:
+    for table in ("kline_enriched", "kline_daily_enriched", "kline_daily"):
+        try:
+            row = repo.execute_one(
+                f"SELECT max(date) FROM {table} WHERE date < ?",
+                [before],
+            )
+        except Exception:  # noqa: BLE001
+            row = None
+        parsed = _parse_date(row[0] if row else None)
+        if parsed:
+            return parsed
+    return None
+
+
 # ================================================================
 # 主装配入口
 # ================================================================
@@ -436,18 +496,6 @@ def build_market_overview(
             live_df = pl.DataFrame()
             live_date = None
 
-        if live_df.is_empty():
-            try:
-                quote_service.refresh()
-                status = _quote_status(quote_service)
-                live_df, live_date = quote_service.get_enriched_today()
-                if live_df.is_empty():
-                    live_df = quote_service.get_quotes_compat()
-                    live_date = date.today() if not live_df.is_empty() else None
-            except Exception:  # noqa: BLE001
-                live_df = pl.DataFrame()
-                live_date = None
-
     as_of = requested_as_of or live_date or svc.latest_date()
     indices = _index_quotes(repo, quote_service, requested_as_of)
 
@@ -477,29 +525,26 @@ def build_market_overview(
         df = live_df
     else:
         df = svc._load_enriched_for_date(as_of)
-    if df.is_empty():
-        rows: list[dict] = []
-    else:
-        cols = [
-            "symbol", "name", "close", "prev_close", "high", "low", "change_pct", "amount", "turnover_rate", "volume",
-            "vol_ratio_5d", "consecutive_limit_ups", "signal_limit_up", "signal_broken_limit_up", "signal_limit_down",
-            "ma5", "ma20", "ma60", "high_60d", "low_60d", "signal_n_day_high", "signal_n_day_low",
-        ]
-        df = df.select([c for c in cols if c in df.columns])
-        rows = df.to_dicts()
+    rows = _rows_from_enriched_df(df)
 
     # 过滤真停牌（volume=0 且 change_pct=0）。未开盘时 OpenTDX 可能全市场
     # volume=0/change_pct=0 但 close=pre_close，此时应保留这些真实昨收报价。
-    if rows and "volume" in rows[0]:
-        active_rows = [
-            r for r in rows
-            if (_finite(r.get("volume")) or 0) > 0
-            or (_finite(r.get("change_pct")) or 0) != 0
-        ]
-        if active_rows:
-            rows = active_rows
-        else:
-            rows = [r for r in rows if (_finite(r.get("close")) or 0) > 0]
+    rows = _filter_active_rows(rows)
+
+    if requested_as_of is None and _is_abnormal_full_market_flat(rows):
+        fallback_date = _previous_data_date(repo, as_of)
+        seen: set[date] = set()
+        while fallback_date and fallback_date not in seen:
+            seen.add(fallback_date)
+            fallback_rows = _filter_active_rows(
+                _rows_from_enriched_df(svc._load_enriched_for_date(fallback_date))
+            )
+            if fallback_rows and not _is_abnormal_full_market_flat(fallback_rows):
+                as_of = fallback_date
+                rows = fallback_rows
+                indices = _index_quotes(repo, quote_service, as_of)
+                break
+            fallback_date = _previous_data_date(repo, fallback_date)
 
     total = len(rows)
     up = sum(1 for r in rows if (_finite(r.get("change_pct")) or 0) > 0)

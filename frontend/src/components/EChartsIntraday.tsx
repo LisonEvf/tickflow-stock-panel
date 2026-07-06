@@ -31,8 +31,11 @@ interface Props {
 function fmtTime(dt: string): string {
   const match = dt.match(/(\d{2}):(\d{2})/)
   if (!match) return dt.slice(11, 16)
-  const h = (parseInt(match[1]) + 8) % 24
-  return `${String(h).padStart(2, '0')}:${match[2]}`
+  const h = parseInt(match[1])
+  const direct = `${String(h).padStart(2, '0')}:${match[2]}`
+  if (FULL_DAY_TIME_SET.has(direct)) return direct
+  const shifted = `${String((h + 8) % 24).padStart(2, '0')}:${match[2]}`
+  return FULL_DAY_TIME_SET.has(shifted) ? shifted : direct
 }
 
 function computeAvgPrice(data: MinuteKlineRow[]): number[] {
@@ -58,12 +61,12 @@ function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
-/** 生成全天分时时间刻度 9:30 ~ 11:30, 13:00 ~ 15:00, 每分钟一个点 (共242个) */
+/** 生成全天分时时间刻度；若数据源返回 9:25 竞价分钟，也能落在时间轴上。 */
 function generateFullDayTimes(): string[] {
   const times: string[] = []
-  // 上午 9:30 ~ 11:30 (121 分钟)
+  // 上午 9:25 ~ 11:30
   for (let h = 9; h <= 11; h++) {
-    const startM = h === 9 ? 30 : 0
+    const startM = h === 9 ? 25 : 0
     const endM = h === 11 ? 30 : 59
     for (let m = startM; m <= endM; m++) {
       times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
@@ -80,6 +83,7 @@ function generateFullDayTimes(): string[] {
 }
 
 const FULL_DAY_TIMES = generateFullDayTimes()
+const FULL_DAY_TIME_SET = new Set(FULL_DAY_TIMES)
 
 /** 根据 symbol 判断涨跌停幅度 (创业板/科创板 ±20%, 北交所 ±30%, 其余 ±10%) */
 function getLimitPct(symbol?: string): number {
@@ -211,14 +215,15 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     }
   }
 
-  // x 轴标签: 9:30, 10:30, 11:30/13:00, 14:00, 15:00
-  // 11:30(idx 120) 和 13:00(idx 121) 相邻会重叠, 合并为一个标签
+  // x 轴标签: 9:25, 9:30, 10:30, 11:30/13:00, 14:00, 15:00
+  // 11:30 和 13:00 相邻会重叠, 合并为一个标签
   const xAxisLabelMap: Record<number, string> = {
-    0: '9:30',
-    60: '10:30',
-    120: '11:30/13:00',
-    181: '14:00',
-    241: '15:00',
+    0: '9:25',
+    5: '9:30',
+    65: '10:30',
+    125: '11:30/13:00',
+    186: '14:00',
+    246: '15:00',
   }
   const xAxisLabelFormatter = (_value: string, idx: number) => {
     return xAxisLabelMap[idx] ?? ''
@@ -285,6 +290,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
           fontFamily: 'JetBrains Mono, monospace',
           formatter: xAxisLabelFormatter,
           interval: 0,
+          hideOverlap: true,
         },
         axisTick: { show: false },
         splitLine: {

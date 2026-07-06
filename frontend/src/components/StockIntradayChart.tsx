@@ -42,6 +42,10 @@ export function StockIntradayChart({
   })
 
   const minuteRows: MinuteKlineRow[] = useMemo(() => minute.data?.rows ?? [], [minute.data?.rows])
+  const requestedDate = minute.data?.requested_date ?? date
+  const actualDate = minute.data?.date ?? date
+  const isFallback = minute.data?.fallback === true && !!actualDate && actualDate !== requestedDate
+  const chartHeight = isFallback ? Math.max(42, height - 22) : height
   // source=none 表示本地无数据且 OpenTDX 也拉不到 (停牌/复牌延迟/非交易日)
   // 此时不弹"是否获取"询问窗, 只做静态提示, 避免误导用户去拉明知拉不到的数据
   const sourceIsNone = minute.data?.source === 'none'
@@ -106,14 +110,21 @@ export function StockIntradayChart({
         </>
       )}
       {minuteRows.length > 0 && (
-        <EChartsIntraday
-          data={minuteRows}
-          height={height}
-          prevClose={prevClose}
-          date={date}
-          symbol={symbol}
-          onPriceHover={onPriceHover}
-        />
+        <>
+          {isFallback && (
+            <div className="h-[22px] flex items-center justify-end px-2 text-[11px] text-muted">
+              当日暂无分时，已显示 {actualDate} 数据
+            </div>
+          )}
+          <EChartsIntraday
+            data={minuteRows}
+            height={chartHeight}
+            prevClose={prevClose}
+            date={actualDate ?? undefined}
+            symbol={symbol}
+            onPriceHover={onPriceHover}
+          />
+        </>
       )}
     </div>
   )

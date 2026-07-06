@@ -1,10 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Loader2,
-  Check,
   CheckCircle2,
   ArrowRight,
   ArrowLeft,
@@ -19,18 +18,27 @@ import {
   TrendingUp,
   FileText,
   Landmark,
-  Database,
+  Bot,
+  KeyRound,
+  LogIn,
+  UserPlus,
+  Plug,
+  Server,
+  Wallet,
+  ExternalLink,
 } from 'lucide-react'
-import { api } from '@/lib/api'
-import { useCapabilities, useSettings } from '@/lib/useSharedQueries'
+import { api, type LlmServerGroup, type LlmServerGroupId, type LlmServerGroupsResponse, type SettingsState } from '@/lib/api'
+import { useSettings } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
-import { CAP_LABELS } from '@/lib/capability-labels'
 import { Logo } from '@/components/Logo'
 
-// ===== 引导页:4 步向导 =====
-// 0. 欢迎  1. 数据源  2. 能力探测结果  3. 完成 → 写标记 → 进面板
+const TOKEN_KEY = 'opentdx_llm_server_access_token'
+const DEFAULT_MODEL = 'gpt-5.5'
 
-const STEPS = ['欢迎', '数据源', '能力探测', '完成'] as const
+// ===== 引导页:3 步向导 =====
+// 0. 欢迎  1. 官方 LLM 服务  2. 完成 → 写标记 → 进面板
+
+const STEPS = ['欢迎', 'LLM 服务', '完成'] as const
 
 const BRAND = '#8B5CF6'
 
@@ -40,11 +48,55 @@ const HIGHLIGHTS = [
   { icon: TrendingUp,  title: '个股详情',   desc: '详情页内一键 AI 分析,关键价位、技术形态一目了然', tint: 'text-warning' },
   { icon: Flame,       title: '连板梯队',   desc: '涨停梯队、封板强度、炸板监控,情绪温度计', tint: 'text-warning' },
   { icon: Landmark,    title: '概念行业',   desc: '概念板块、行业维度的资金流向与热度排名', tint: 'text-accent' },
-  { icon: FileText,    title: '财务分析',   desc: 'AI 解读财报,利润、资负、现金流、核心指标', tint: 'text-bear' },
+  { icon: FileText,    title: '财务分析',   desc: '官方 LLM 服务可直接支撑财报与个股 AI 解读', tint: 'text-bear' },
   { icon: ShieldCheck, title: '回测验证',   desc: '策略历史回测、因子分析,用数据验证逻辑', tint: 'text-accent' },
   { icon: Radar,       title: '实时监控',   desc: '自定义条件 / 策略监控,盘中触发即推送告警', tint: 'text-bear' },
-  { icon: BellRing,    title: '本地优先',   desc: '数据本地存储,隐私可控,断网仍可查阅', tint: 'text-bull' },
+  { icon: BellRing,    title: '本地优先',   desc: 'OpenTDX 数据源默认可用,行情与记录本地存储', tint: 'text-bull' },
 ]
+
+function normalizeGroups(data: LlmServerGroupsResponse | undefined): LlmServerGroup[] {
+  if (!data) return []
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data.items)) return data.items
+  if (Array.isArray(data.groups)) return data.groups
+  if (Array.isArray(data.data)) return data.data
+  return []
+}
+
+function groupValue(group: LlmServerGroup): string {
+  const raw = group.id ?? group.group_id ?? group.value ?? group.code ?? group.name
+  return raw == null ? '' : String(raw)
+}
+
+function groupLabel(group: LlmServerGroup): string {
+  return group.name ?? group.label ?? group.display_name ?? group.code ?? `分组 ${groupValue(group)}`
+}
+
+function groupPayloadValue(value: string): LlmServerGroupId | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return /^-?\d+$/.test(trimmed) ? Number(trimmed) : trimmed
+}
+
+function keyTail(key: string | null | undefined) {
+  const value = (key ?? '').trim()
+  const match = value.match(/[A-Za-z0-9_-]+$/)
+  return match?.[0] ?? ''
+}
+
+function isUsableApiKey(key: string | undefined) {
+  const value = (key ?? '').trim()
+  return value.length > 16 && !value.includes('...') && !/[•*]/.test(value)
+}
+
+function money(value: number | null | undefined) {
+  const n = Number(value ?? 0)
+  return `$${n.toFixed(4)}`
+}
+
+function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : '操作失败,请稍后重试'
+}
 
 export function Onboarding() {
   const navigate = useNavigate()
@@ -52,12 +104,9 @@ export function Onboarding() {
 
   const [step, setStep] = useState(0)
 
-  // 完成向导 —— 写后端标记,使守卫放行
   const complete = useMutation({
     mutationFn: api.completeOnboarding,
     onSuccess: (data) => {
-      // 用接口返回值同步更新缓存,确保跳转时守卫立即看到 onboarding_completed: true
-      // (避免 invalidate 后台重取未返回时, 守卫用旧缓存 false 误重定向回引导页)
       qc.setQueryData(QK.settings, (old: any) =>
         old ? { ...old, onboarding_completed: data.onboarding_completed } : old,
       )
@@ -65,7 +114,6 @@ export function Onboarding() {
       navigate('/', { replace: true })
     },
     onError: () => {
-      // 标记失败不应阻塞用户进入面板,仍放行
       navigate('/', { replace: true })
     },
   })
@@ -74,7 +122,6 @@ export function Onboarding() {
 
   return (
     <div className="relative min-h-screen bg-base overflow-hidden flex flex-col">
-      {/* 背景光晕 —— 品牌 + 主色渐变 */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
           className="absolute -top-40 -left-40 h-[28rem] w-[28rem] rounded-full blur-[120px] opacity-20"
@@ -84,7 +131,6 @@ export function Onboarding() {
           className="absolute -bottom-40 -right-32 h-[26rem] w-[26rem] rounded-full blur-[120px] opacity-15"
           style={{ background: 'radial-gradient(circle, hsl(var(--accent)), transparent 70%)' }}
         />
-        {/* 极淡网格底纹 */}
         <div
           className="absolute inset-0 opacity-[0.025]"
           style={{
@@ -95,7 +141,6 @@ export function Onboarding() {
         />
       </div>
 
-      {/* 顶栏:logo + 进度指示 */}
       <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-2.5 text-foreground">
           <Logo
@@ -105,7 +150,6 @@ export function Onboarding() {
           />
           <span className="text-sm font-semibold tracking-tight">OpenTDX Stock Panel</span>
         </div>
-        {/* 步骤进度条 —— 胶囊式 */}
         <div className="flex items-center gap-1.5">
           {STEPS.map((label, i) => (
             <div key={label} className="flex items-center gap-1.5">
@@ -132,9 +176,8 @@ export function Onboarding() {
         </div>
       </header>
 
-      {/* 步骤内容 */}
       <main className="relative z-10 flex-1 flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-xl">
+        <div className="w-full max-w-2xl">
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
@@ -145,10 +188,13 @@ export function Onboarding() {
             >
               {step === 0 && <WelcomeStep onNext={() => setStep(1)} onSkip={finish} />}
               {step === 1 && (
-                <KeyStep onNext={() => setStep(2)} onSkip={() => setStep(2)} onBack={() => setStep(0)} />
+                <LlmServiceStep
+                  onNext={() => setStep(2)}
+                  onSkip={finish}
+                  onBack={() => setStep(0)}
+                />
               )}
-              {step === 2 && <ResultStep onNext={() => setStep(3)} onBack={() => setStep(1)} />}
-              {step === 3 && <FinishStep onNext={finish} onBack={() => setStep(2)} pending={complete.isPending} />}
+              {step === 2 && <FinishStep onNext={finish} onBack={() => setStep(1)} pending={complete.isPending} />}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -157,12 +203,9 @@ export function Onboarding() {
   )
 }
 
-// ===== Step 0: 欢迎 =====
-
 function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   return (
     <div className="text-center">
-      {/* 品牌 badge */}
       <motion.div
         initial={{ scale: 0.85, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -177,11 +220,10 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         欢迎使用 OpenTDX Stock Panel
       </h1>
       <p className="mt-3 text-sm text-secondary leading-relaxed max-w-md mx-auto">
-        一个本地化的 A 股量化分析面板 —— 行情、选股、回测、监控、财务一体化。
-        花一分钟配置,即可开始使用。
+        OpenTDX 行情数据源已经默认可用。初始化只需要接入官方 LLM 服务,
+        也可以跳过后进入面板再配置。
       </p>
 
-      {/* 特性卡片 —— 3×3 网格,横向布局压缩高度 */}
       <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-left">
         {HIGHLIGHTS.map((h, i) => (
           <motion.div
@@ -208,71 +250,379 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
           onClick={onNext}
           className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 transition-all"
         >
-          开始配置
+          接入官方 LLM
           <ArrowRight className="h-4 w-4" />
         </button>
         <button
           onClick={onSkip}
           className="px-4 h-11 rounded-xl text-sm text-secondary hover:text-foreground hover:bg-elevated transition-colors"
         >
-          稍后再说
+          跳过
         </button>
       </div>
     </div>
   )
 }
 
-// ===== Step 1: 数据源 =====
-
-function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () => void; onBack: () => void }) {
+function LlmServiceStep({
+  onNext,
+  onSkip,
+  onBack,
+}: {
+  onNext: () => void
+  onSkip: () => void
+  onBack: () => void
+}) {
+  const qc = useQueryClient()
   const settings = useSettings()
-  const mode = settings.data?.mode ?? 'opentdx'
-  const label = settings.data?.tier_label ?? 'OpenTDX'
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? '')
+  const [serverUrl, setServerUrl] = useState('http://127.0.0.1:18080')
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [verifyCode, setVerifyCode] = useState('')
+  const [promoCode, setPromoCode] = useState('')
+  const [keyName, setKeyName] = useState('OpenTDX Stock Panel')
+  const [selectedGroupId, setSelectedGroupId] = useState('')
+  const [selectedKeyId, setSelectedKeyId] = useState<number | null>(null)
+  const [model, setModel] = useState(DEFAULT_MODEL)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const config = useQuery({
+    queryKey: ['llm-server-config'],
+    queryFn: api.llmServerConfig,
+  })
+  const health = useQuery({
+    queryKey: ['llm-server-health'],
+    queryFn: api.llmServerHealth,
+    refetchOnWindowFocus: false,
+  })
+  const profile = useQuery({
+    queryKey: ['llm-server-profile', token],
+    queryFn: () => api.llmServerProfile(token),
+    enabled: !!token,
+    retry: false,
+  })
+  const keys = useQuery({
+    queryKey: ['llm-server-keys', token],
+    queryFn: () => api.llmServerKeys(token),
+    enabled: !!token,
+    retry: false,
+  })
+  const groups = useQuery({
+    queryKey: ['llm-server-groups', token],
+    queryFn: () => api.llmServerGroupsAvailable(token),
+    enabled: !!token,
+    retry: false,
+  })
+
+  useEffect(() => {
+    if (config.data?.base_url) setServerUrl(config.data.base_url)
+  }, [config.data?.base_url])
+
+  const gatewayUrl = config.data?.gateway_base_url ?? `${serverUrl.replace(/\/$/, '')}/v1`
+  const isOfficialConfigured = Boolean(
+    settings.data?.ai_configured &&
+    settings.data?.ai_base_url &&
+    settings.data.ai_base_url.replace(/\/$/, '') === gatewayUrl.replace(/\/$/, ''),
+  )
+  const groupItems = useMemo(() => normalizeGroups(groups.data), [groups.data])
+
+  useEffect(() => {
+    if (groupItems.length === 0) {
+      if (selectedGroupId) setSelectedGroupId('')
+      return
+    }
+    const values = groupItems.map(groupValue).filter(Boolean)
+    if (selectedGroupId && values.includes(selectedGroupId)) return
+    const defaultGroupId = !Array.isArray(groups.data)
+      ? groups.data?.default_group_id ?? groups.data?.default_group
+      : null
+    const defaultValue = defaultGroupId == null ? '' : String(defaultGroupId)
+    setSelectedGroupId(defaultValue && values.includes(defaultValue) ? defaultValue : values[0] ?? '')
+  }, [groupItems, groups.data, selectedGroupId])
+
+  const selectedKey = useMemo(() => {
+    const items = keys.data?.items ?? []
+    return items.find(k => k.id === selectedKeyId) ?? items.find(k => k.status === 'active') ?? items[0]
+  }, [keys.data?.items, selectedKeyId])
+
+  useEffect(() => {
+    if (selectedKeyId) return
+    const items = keys.data?.items ?? []
+    if (items.length === 0) return
+    const currentTail = keyTail(settings.data?.ai_api_key_masked)
+    const appliedKey = currentTail ? items.find(k => keyTail(k.key).endsWith(currentTail)) : undefined
+    const nextKey = appliedKey ?? items.find(k => k.status === 'active') ?? items[0]
+    if (nextKey?.id) setSelectedKeyId(nextKey.id)
+  }, [keys.data?.items, selectedKeyId, settings.data?.ai_api_key_masked])
+
+  const login = useMutation({
+    mutationFn: () => api.llmServerLogin(email.trim(), password),
+    onMutate: () => {
+      setError('')
+      setMessage('')
+    },
+    onSuccess: (data) => {
+      localStorage.setItem(TOKEN_KEY, data.access_token)
+      setToken(data.access_token)
+      setPassword('')
+      setMessage('登录成功,可以继续创建或接入 API Key。')
+    },
+    onError: (err) => setError(errorMessage(err)),
+  })
+
+  const register = useMutation({
+    mutationFn: () => api.llmServerRegister({
+      email: email.trim(),
+      password,
+      verify_code: verifyCode.trim() || undefined,
+      promo_code: promoCode.trim() || undefined,
+    }),
+    onMutate: () => {
+      setError('')
+      setMessage('')
+    },
+    onSuccess: (data) => {
+      localStorage.setItem(TOKEN_KEY, data.access_token)
+      setToken(data.access_token)
+      setPassword('')
+      setMessage('账户已创建,可以继续创建或接入 API Key。')
+    },
+    onError: (err) => setError(errorMessage(err)),
+  })
+
+  const connect = useMutation({
+    mutationFn: async () => {
+      if (!token) throw new Error('请先登录或注册官方 LLM 服务')
+      const modelName = model.trim() || DEFAULT_MODEL
+      let apiKey = isUsableApiKey(selectedKey?.key) ? selectedKey?.key ?? '' : ''
+      if (!apiKey) {
+        const payload: { name: string; group_id?: LlmServerGroupId | null } = {
+          name: keyName.trim() || 'OpenTDX Stock Panel',
+        }
+        const groupId = groupPayloadValue(selectedGroupId)
+        if (groupId != null) payload.group_id = groupId
+        const created = await api.llmServerCreateKey(token, payload)
+        apiKey = created.key
+        setSelectedKeyId(created.id)
+      }
+      if (!isUsableApiKey(apiKey)) {
+        throw new Error('未拿到完整 API Key,请新建 Key 后再接入')
+      }
+      return api.llmServerUseKey(apiKey, modelName, config.data?.base_url ?? serverUrl)
+    },
+    onMutate: () => {
+      setError('')
+      setMessage('')
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
+        ...prev,
+        ai_provider: data.ai_provider,
+        ai_base_url: data.ai_base_url,
+        ai_api_key_masked: data.ai_api_key_masked,
+        has_ai_key: true,
+        ai_configured: data.ai_configured,
+        ai_model: data.ai_model,
+        ai_codex_command: 'codex',
+      } : prev)
+      qc.invalidateQueries({ queryKey: QK.settings })
+      qc.invalidateQueries({ queryKey: ['llm-server-keys', token] })
+      setMessage('官方 LLM 服务已接入 OpenTDX AI。')
+      onNext()
+    },
+    onError: (err) => setError(errorMessage(err)),
+  })
+
+  const busy = login.isPending || register.isPending || connect.isPending
+  const canAuth = !!email.trim() && !!password && !busy
+  const canConnect = !!token && !!model.trim() && !busy && (!groups.isLoading || groupItems.length === 0 || !!selectedGroupId)
 
   return (
     <div>
       <div className="flex items-center gap-2.5">
         <div className="rounded-lg bg-accent/10 p-2">
-          <ShieldCheck className="h-4 w-4 text-accent" />
+          <Bot className="h-4 w-4 text-accent" />
         </div>
-        <h2 className="text-xl font-bold text-foreground">确认 OpenTDX 数据源</h2>
+        <h2 className="text-xl font-bold text-foreground">接入官方 LLM 服务</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        当前版本使用本地 OpenTDX 连接通达信行情服务器获取真实 A 股数据,无需配置 API Key。
-        后续页面会通过后端能力探测确认可用的日 K、分钟 K、实时报价等能力。
+        行情数据已经默认走 OpenTDX。官方 LLM 服务用于个股分析、财务解读和复盘生成,
+        这里可以完成注册登录并一键应用到 AI 设置。
       </p>
 
-      <div className="mt-5 rounded-card border border-accent/30 bg-accent/[0.06] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">当前数据源</div>
-            <div className="mt-1 text-xl font-semibold text-foreground">{label}</div>
-          </div>
-          <span className="rounded-full bg-bear/15 px-3 py-1 text-xs font-semibold text-bear">
-            {mode === 'opentdx' ? '已启用' : '可用'}
-          </span>
-        </div>
-        <div className="mt-4 grid gap-2 text-xs text-secondary">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-3.5 w-3.5 text-bear" />
-            <span>日 K 数据直接来自 OpenTDX 实时查询结果</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-3.5 w-3.5 text-bear" />
-            <span>分钟 K 与报价能力由后端统一封装给现有页面使用</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-3.5 w-3.5 text-bear" />
-            <span>无需外部账户,数据会按需落到本地缓存</span>
-          </div>
-        </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <StatusTile
+          icon={Server}
+          title="服务状态"
+          value={health.isFetching ? '检测中' : health.data?.ok ? '可连接' : '未连接'}
+          tone={health.data?.ok ? 'good' : 'warn'}
+        />
+        <StatusTile
+          icon={Wallet}
+          title="账户余额"
+          value={token ? money(profile.data?.balance) : '--'}
+          tone={token ? 'good' : 'muted'}
+        />
+        <StatusTile
+          icon={Plug}
+          title="AI 接入"
+          value={isOfficialConfigured ? '已接入' : settings.data?.ai_configured ? '已配置其他' : '未接入'}
+          tone={isOfficialConfigured ? 'good' : 'muted'}
+        />
       </div>
 
-      {/* 底部操作 */}
+      {!token ? (
+        <div className="mt-5 rounded-card border border-border bg-surface/80 p-4">
+          <div className="mb-4 inline-flex rounded-lg bg-elevated p-1 text-xs">
+            <button
+              onClick={() => setAuthMode('login')}
+              className={`rounded-md px-3 py-1.5 ${authMode === 'login' ? 'bg-base text-foreground' : 'text-muted'}`}
+            >
+              登录
+            </button>
+            <button
+              onClick={() => setAuthMode('register')}
+              className={`rounded-md px-3 py-1.5 ${authMode === 'register' ? 'bg-base text-foreground' : 'text-muted'}`}
+            >
+              注册
+            </button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="邮箱">
+              <input value={email} onChange={e => setEmail(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="密码">
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
+
+          {authMode === 'register' && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="验证码">
+                <input value={verifyCode} onChange={e => setVerifyCode(e.target.value)} className={inputCls} />
+              </Field>
+              <Field label="邀请码/优惠码">
+                <input value={promoCode} onChange={e => setPromoCode(e.target.value)} className={inputCls} />
+              </Field>
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <button
+              onClick={() => authMode === 'login' ? login.mutate() : register.mutate()}
+              disabled={!canAuth}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : authMode === 'login' ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+              {authMode === 'login' ? '登录官方服务' : '创建账户'}
+            </button>
+            <QuickLink href={`${serverUrl.replace(/\/$/, '')}/${authMode === 'login' ? 'login' : 'register'}`} label="打开网页版" />
+          </div>
+        </div>
+      ) : isOfficialConfigured ? (
+        <div className="mt-5 rounded-card border border-bear/25 bg-bear/[0.06] p-4">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-bear" />
+            <div>
+              <div className="text-sm font-medium text-foreground">官方 LLM 服务已接入</div>
+              <p className="mt-1 text-xs text-secondary leading-relaxed">
+                当前模型为 {settings.data?.ai_model || DEFAULT_MODEL},进入面板后可直接使用 AI 个股分析和复盘功能。
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-5 rounded-card border border-border bg-surface/80 p-4">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-medium text-foreground">{profile.data?.email ?? '已登录官方 LLM 服务'}</div>
+              <div className="mt-1 text-xs text-muted">
+                余额 {money(profile.data?.balance)} · API Key {(keys.data?.items ?? []).length} 个
+              </div>
+            </div>
+            <a
+              href="/llm-service"
+              className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-btn border border-border bg-base px-3 text-xs text-secondary hover:text-accent sm:mt-0"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              服务中心
+            </a>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_160px]">
+            <Field label="Key 名称">
+              <input value={keyName} onChange={e => setKeyName(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="模型">
+              <input value={model} onChange={e => setModel(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="分组">
+              <select
+                value={selectedGroupId}
+                onChange={e => setSelectedGroupId(e.target.value)}
+                disabled={groups.isLoading || groupItems.length === 0}
+                className={inputCls}
+              >
+                {groups.isLoading && <option value="">加载分组...</option>}
+                {!groups.isLoading && groupItems.length === 0 && <option value="">服务端默认分组</option>}
+                {groupItems.map(group => {
+                  const value = groupValue(group)
+                  return <option key={value || groupLabel(group)} value={value}>{groupLabel(group)}</option>
+                })}
+              </select>
+            </Field>
+            <Field label="当前 Key">
+              <select
+                value={selectedKey?.id ?? ''}
+                onChange={e => setSelectedKeyId(e.target.value ? Number(e.target.value) : null)}
+                disabled={keys.isLoading || (keys.data?.items ?? []).length === 0}
+                className={inputCls}
+              >
+                {keys.isLoading && <option value="">加载 Key...</option>}
+                {!keys.isLoading && (keys.data?.items ?? []).length === 0 && <option value="">自动新建</option>}
+                {(keys.data?.items ?? []).map(key => (
+                  <option key={key.id} value={key.id}>{key.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          {groups.isError && (
+            <div className="mt-3 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
+              暂时无法读取可用分组,仍可使用服务端默认分组自动新建 Key。
+            </div>
+          )}
+
+          <div className="mt-4 rounded-lg border border-border bg-base px-3 py-2 text-xs">
+            <Line label="网关地址" value={gatewayUrl} mono />
+            <Line label="接入策略" value={isUsableApiKey(selectedKey?.key) ? '使用选中 Key' : '自动新建 Key 后接入'} />
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div className="mt-4 rounded-btn border border-bear/30 bg-bear/5 px-3 py-2 text-xs text-bear">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="mt-4 rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+          {error}
+        </div>
+      )}
+
       <div className="mt-6 flex items-center justify-between">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors disabled:opacity-40"
         >
           <ArrowLeft className="h-4 w-4" />
           上一步
@@ -280,128 +630,40 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         <div className="flex items-center gap-2">
           <button
             onClick={onSkip}
-            className="px-4 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+            disabled={busy}
+            className="px-4 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors disabled:opacity-40"
           >
-            稍后检测
+            跳过
           </button>
-          <button
-            onClick={onNext}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-40 transition-all"
-          >
-            <Check className="h-4 w-4" />
-            继续
-          </button>
+          {isOfficialConfigured ? (
+            <button
+              onClick={onNext}
+              className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-colors"
+            >
+              继续
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              onClick={() => connect.mutate()}
+              disabled={!canConnect}
+              className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-40 transition-all"
+            >
+              {connect.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              一键接入
+            </button>
+          )}
         </div>
       </div>
     </div>
   )
 }
-
-// ===== Step 2: 能力探测结果 =====
-
-function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const settings = useSettings()
-  const caps = useCapabilities()
-
-  const providerReady = settings.data?.mode === 'opentdx' || settings.data?.tier_label === 'OpenTDX'
-  const capList = caps.data ? Object.entries(caps.data.capabilities) : []
-
-  return (
-    <div>
-      <div className="flex items-center gap-2.5">
-        <div className="rounded-lg bg-accent/10 p-2">
-          <ScanSearch className="h-4 w-4 text-accent" />
-        </div>
-        <h2 className="text-xl font-bold text-foreground">能力探测结果</h2>
-      </div>
-
-      {providerReady ? (
-        <>
-          <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-            OpenTDX 数据源已生效,以下是当前可用的全部能力。后续可在
-            <span className="text-foreground font-medium"> 设置 → 凭据与能力 </span>
-            中重新检测。
-          </p>
-
-          <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-muted">订阅档位</span>
-              <span className="font-mono text-2xl font-bold tracking-tight text-foreground">
-                {caps.data?.label ?? settings.data?.tier_label ?? '—'}
-              </span>
-            </div>
-
-            {caps.isLoading ? (
-              <div className="mt-4 flex items-center gap-2 text-xs text-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                正在探测能力…
-              </div>
-            ) : capList.length > 0 ? (
-              <div className="mt-4 grid grid-cols-1 gap-1.5">
-                {capList.slice(0, 8).map(([cap]) => {
-                  const meta = CAP_LABELS[cap]
-                  return (
-                    <div key={cap} className="flex items-center gap-2 text-xs">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-bear shrink-0" />
-                      <span className="text-foreground">{meta?.name ?? cap}</span>
-                    </div>
-                  )
-                })}
-                {capList.length > 8 && (
-                  <div className="text-[11px] text-muted pl-5">…等共 {capList.length} 项</div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-4 text-xs text-muted">暂未探测到能力</div>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-6 text-center">
-          <div className="mx-auto w-fit rounded-xl bg-elevated p-3">
-            <Zap className="h-6 w-6 text-warning" />
-          </div>
-          <div className="mt-3 text-sm font-medium text-foreground">将以本地数据源继续</div>
-          <p className="mt-2 text-xs text-muted leading-relaxed max-w-sm mx-auto">
-            当前未完成能力探测,仍可进入看板后按需获取历史日K数据。可随时在
-            <span className="text-foreground font-medium"> 设置 → 凭据与能力 </span>重新检测。
-          </p>
-        </div>
-      )}
-
-      {/* 底部操作 */}
-      <div className="mt-6 flex items-center justify-between">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          上一步
-        </button>
-        <button
-          onClick={onNext}
-          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-colors"
-        >
-          下一步
-          <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ===== Step 3: 完成 =====
 
 function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: () => void; pending: boolean }) {
-  const settings = useSettings()
-  const providerReady = settings.data?.mode === 'opentdx' || settings.data?.tier_label === 'OpenTDX'
-
-  // 首要行动:获取数据(不管配没配 Key, 新用户都需要先拉数据)
-  // 快速上手入口(精简为核心功能)
   const tips = [
-    { icon: TrendingUp, text: '打开任意个股详情:AI 四维分析 + 关键价位' },
-    { icon: ScanSearch, text: '「选股」页:内置多套策略,一键扫描全市场' },
-    { icon: ShieldCheck, text: '「回测」页:用历史数据验证策略表现,用数据说话' },
+    { icon: TrendingUp, text: '打开任意个股详情:点击 AI 分析生成操作建议' },
+    { icon: FileText, text: '进入财务分析:官方 LLM 服务可解读利润、资负、现金流' },
+    { icon: Wallet, text: 'LLM 服务页:查看余额、充值、管理 API Key 与分组' },
   ]
 
   return (
@@ -417,7 +679,6 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
           style={{ background: `linear-gradient(135deg, ${BRAND}22, transparent)` }}
         >
           <CheckCircle2 className="h-12 w-12 text-bear" />
-          {/* 光晕脉冲 */}
           <motion.div
             animate={{ scale: [1, 1.4], opacity: [0.4, 0] }}
             transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
@@ -426,14 +687,12 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         </div>
       </motion.div>
 
-      <h1 className="mt-6 text-2xl font-bold text-foreground">一切就绪!</h1>
+      <h1 className="mt-6 text-2xl font-bold text-foreground">初始化完成</h1>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed max-w-md mx-auto">
-        {providerReady
-          ? 'OpenTDX 数据源已生效,进入面板后系统会自动引导你获取行情数据,完成后即可使用全部功能。'
-          : '进入面板后系统会自动引导你获取历史日K数据,即可开始体验。'}
+        OpenTDX 数据源默认可用。进入面板后即可查看行情、运行策略,
+        已接入 LLM 时可直接使用所有 AI 分析功能。
       </p>
 
-      {/* 首要行动:获取数据 */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -441,17 +700,16 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         className="mt-5 flex items-start gap-2.5 rounded-card border border-accent/30 bg-accent/[0.06] px-4 py-3 text-left"
       >
         <div className="rounded-lg bg-accent/15 p-1.5 shrink-0 mt-px">
-          <Database className="h-4 w-4 text-accent" />
+          <Zap className="h-4 w-4 text-accent" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium text-foreground">下一步:获取行情数据</div>
+          <div className="text-sm font-medium text-foreground">下一步:开始分析</div>
           <p className="mt-1 text-xs text-secondary leading-relaxed">
-            进入面板后,看板会自动引导你拉取近 1 年全 A 股日K(约 5500 只,预计 1-3 分钟)。同步期间可浏览其他页面。
+            如果暂时跳过了 LLM 接入,后续可从左侧「LLM服务」或「设置 → AI」继续配置。
           </p>
         </div>
       </motion.div>
 
-      {/* 快速上手入口 */}
       <div className="mt-4 space-y-2 text-left">
         {tips.map((t, i) => (
           <motion.div
@@ -469,7 +727,6 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         ))}
       </div>
 
-      {/* 底部操作 */}
       <div className="mt-8 flex items-center justify-between">
         <button
           onClick={onBack}
@@ -487,6 +744,62 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
           {pending ? '正在进入…' : '进入面板'}
         </button>
       </div>
+    </div>
+  )
+}
+
+const inputCls = 'h-9 w-full rounded-lg bg-base px-3 text-xs text-foreground ring-1 ring-border/40 focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50'
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-[10px] uppercase tracking-wider text-muted/70">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function Line({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1">
+      <span className="text-muted">{label}</span>
+      <span className={`min-w-0 truncate text-right text-foreground ${mono ? 'font-mono' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function QuickLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-border bg-base px-4 text-sm text-secondary hover:border-accent/40 hover:text-accent"
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+      {label}
+    </a>
+  )
+}
+
+function StatusTile({ icon: Icon, title, value, tone }: {
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  value: string
+  tone: 'good' | 'warn' | 'muted'
+}) {
+  const cls = tone === 'good'
+    ? 'border-bear/25 bg-bear/[0.06] text-bear'
+    : tone === 'warn'
+      ? 'border-warning/25 bg-warning/[0.06] text-warning'
+      : 'border-border bg-surface/80 text-secondary'
+  return (
+    <div className={`rounded-card border p-3 ${cls}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-wider opacity-75">{title}</span>
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="mt-2 truncate text-sm font-semibold text-foreground">{value}</div>
     </div>
   )
 }

@@ -314,59 +314,142 @@ def get_minute(
 ):
     """读取某只股票某天的分钟 K 线。
 
+    - 未指定日期时优先取今天;今天无数据则回退到前一个交易日
+    - 显式请求今天且今天无数据时,同样回退到前一个交易日
+    - 显式请求历史交易日时严格返回该日,不自动跳日
     - 本地有完整数据(240条) → 直接返回
-    - 本地无数据或不完整 → 从 OpenTDX 实时拉取返回（不写入）
+    - 本地无数据或不完整 → 从 OpenTDX 实时拉取返回(不写入)
     """
     repo = request.app.state.repo
     stock_info = _get_stock_info(repo, symbol)
     stock_name = stock_info.get("name")
+    requested_date = trade_date or date.today()
+    allow_fallback = trade_date is None or requested_date == date.today()
 
-    if trade_date is None:
-        trade_date = repo.latest_minute_date(symbol)
-    if trade_date is None:
-        # 本地无任何分钟K，尝试从 OpenTDX 拉取当天
-        trade_date = date.today()
-        df = kline_sync.fetch_minute_single(symbol, trade_date)
+    df, source = _load_minute_for_date(repo, symbol, requested_date)
+    if not df.is_empty():
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "requested_date": str(requested_date),
+            "date": str(requested_date), "rows": df.to_dicts(), "source": source,
+            "fallback": False, "fallback_reason": None,
         }
 
+    if allow_fallback:
+        fallback = _load_previous_minute_with_data(repo, symbol, requested_date)
+        if fallback:
+            fallback_date, fallback_df, fallback_source = fallback
+            return {
+                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "requested_date": str(requested_date),
+                "date": str(fallback_date), "rows": fallback_df.to_dicts(),
+                "source": fallback_source,
+                "fallback": True,
+                "fallback_reason": "requested_date_empty",
+            }
+
+    return {
+        "symbol": symbol, "name": stock_name, "stock_info": stock_info,
+        "requested_date": str(requested_date),
+        "date": str(requested_date), "rows": [], "source": "none",
+        "fallback": False, "fallback_reason": None,
+    }
+
+
+def _load_minute_for_date(repo, symbol: str, trade_date: date):
     df = repo.get_minute(symbol, trade_date)
 
-    # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
-    expected = 240
-    today = date.today()
-    if trade_date == today:
-        from datetime import datetime as _dt
-        now = _dt.now()
-        h, m = now.hour, now.minute
-        if h < 9 or (h == 9 and m < 30):
-            expected = 0  # 还没开盘
-        elif h < 12 or (h == 12 and m == 0):
-            expected = (h - 9) * 60 + m - 30  # 9:30 起
-        elif h < 13:
-            expected = 120  # 午休
-        elif h < 15:
-            expected = 120 + (h - 13) * 60 + m
-        else:
-            expected = 240
+    # 完整交易日应有 240 条分钟K; 如果是今天(盘中), 期望条数按已交易分钟估算
+    expected = _expected_minute_rows(trade_date)
 
     is_complete = not df.is_empty() and len(df) >= expected * 0.9  # 允许 10% 容差
 
     if is_complete:
-        return {
-            "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
-        }
+        return df, "local"
 
     # 本地不完整或无数据 → 从 OpenTDX 实时拉取
     live_df = kline_sync.fetch_minute_single(symbol, trade_date)
-    return {
-        "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-        "date": str(trade_date), "rows": live_df.to_dicts(),
-        "source": "live" if not live_df.is_empty() else "none",
-    }
+    if not live_df.is_empty():
+        return live_df, "live"
+    if not df.is_empty():
+        return df, "local"
+    return live_df, "none"
+
+
+def _load_previous_minute_with_data(repo, symbol: str, requested_date: date, max_attempts: int = 12):
+    before = requested_date
+    seen: set[date] = set()
+    for _ in range(max_attempts):
+        fallback_date = _previous_trading_date(repo, symbol, before)
+        if not fallback_date or fallback_date in seen or fallback_date >= before:
+            return None
+        seen.add(fallback_date)
+        fallback_df, fallback_source = _load_minute_for_date(repo, symbol, fallback_date)
+        if not fallback_df.is_empty():
+            return fallback_date, fallback_df, fallback_source
+        before = fallback_date
+    return None
+
+
+def _expected_minute_rows(trade_date: date) -> int:
+    if trade_date != date.today():
+        return 240
+
+    from datetime import datetime as _dt
+    now = _dt.now()
+    h, m = now.hour, now.minute
+    if h < 9 or (h == 9 and m < 25):
+        return 0
+    if h == 9 and m < 30:
+        return m - 25
+    if h < 12 or (h == 12 and m == 0):
+        return 5 + (h - 9) * 60 + m - 30
+    if h < 13:
+        return 125
+    if h < 15:
+        return 125 + (h - 13) * 60 + m
+    return 245
+
+
+def _previous_trading_date(repo, symbol: str, before: date) -> date | None:
+    """查找指定日期之前最近一个该股有日K或分钟K的交易日。"""
+    candidates: list[date] = []
+    for table in ("kline_daily", "kline_daily_enriched"):
+        try:
+            row = repo.execute_one(
+                f"SELECT max(date) FROM {table} WHERE symbol = ? AND date < ?",
+                [symbol, before],
+            )
+        except Exception:  # noqa: BLE001
+            row = None
+        parsed = _parse_date(row[0] if row else None)
+        if parsed:
+            candidates.append(parsed)
+
+    try:
+        row = repo.execute_one(
+            "SELECT max(CAST(datetime AS DATE)) FROM kline_minute "
+            "WHERE symbol = ? AND CAST(datetime AS DATE) < ?",
+            [symbol, before],
+        )
+    except Exception:  # noqa: BLE001
+        row = None
+    parsed = _parse_date(row[0] if row else None)
+    if parsed:
+        candidates.append(parsed)
+
+    return max(candidates) if candidates else None
+
+
+def _parse_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 @router.post("/sync")
